@@ -51,6 +51,7 @@ jobs:
       - name: Build APK (release)
         env:
           ANDROID_NDK_HOME: ${{ steps.ndk.outputs.ndk-path }}
+          NDK_HOME: ${{ steps.ndk.outputs.ndk-path }}
         run: cargo quad-apk build --release
 
       - name: Find APK
