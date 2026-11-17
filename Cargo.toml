@@ -8,7 +8,7 @@ crate-type = ["cdylib", "rlib"]
 path = "src/main.rs"      # <--- THIS IS THE CRUCIAL FIX
 
 [[bin]]
-name = "animal-control"
+name = "animal_control"
 path = "src/main.rs"
 
 [dependencies]
