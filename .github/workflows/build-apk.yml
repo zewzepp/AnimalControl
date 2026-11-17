@@ -35,7 +35,7 @@ jobs:
         run: |
           BIN="${{ steps.ndk.outputs.ndk-path }}/toolchains/llvm/prebuilt/linux-x86_64/bin"
           link() { # legacy-triple clang-triple
-            for tool in ar ranlib strip; do
+            for tool in ar ranlib strip readelf nm objdump objcopy; do
               ln -sf "$BIN/llvm-$tool" "$BIN/$1-$tool"
             done
             for tool in gcc clang; do
