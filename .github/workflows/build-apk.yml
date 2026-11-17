@@ -69,6 +69,12 @@ jobs:
         env:
           ANDROID_NDK_HOME: ${{ steps.ndk.outputs.ndk-path }}
           NDK_HOME: ${{ steps.ndk.outputs.ndk-path }}
+          # cargo-quad-apk picks a linker named *-ld, so rustc assumes raw-ld arguments.
+          # Force the gcc/clang-style flavor since the linker is really clang.
+          CARGO_TARGET_ARMV7_LINUX_ANDROIDEABI_RUSTFLAGS: "-C linker-flavor=gcc"
+          CARGO_TARGET_AARCH64_LINUX_ANDROID_RUSTFLAGS: "-C linker-flavor=gcc"
+          CARGO_TARGET_X86_64_LINUX_ANDROID_RUSTFLAGS: "-C linker-flavor=gcc"
+          CARGO_TARGET_I686_LINUX_ANDROID_RUSTFLAGS: "-C linker-flavor=gcc"
         run: cargo quad-apk build --release
 
       - name: Find APK
