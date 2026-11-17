@@ -38,15 +38,27 @@ jobs:
             for tool in ar ranlib strip; do
               ln -sf "$BIN/llvm-$tool" "$BIN/$1-$tool"
             done
-            # rustc calls the linker with cc-style args, so point ld/gcc/clang at the NDK clang wrapper
-            for tool in ld gcc clang; do
+            for tool in gcc clang; do
               ln -sf "$BIN/$2-clang" "$BIN/$1-$tool"
             done
+            # cargo-quad-apk calls "<triple>-ld", so rustc sends raw ld-style
+            # arguments. Wrap clang so they are forwarded to the linker (-Wl,)
+            # while clang still adds the Android runtime libs itself.
+            rm -f "$BIN/$1-ld"
+            cat > "$BIN/$1-ld" <<EOF
+          #!/bin/bash
+          args=()
+          for a in "\$@"; do args+=("-Wl,\$a"); done
+          exec "$BIN/$2-clang" -shared -fuse-ld=lld "\${args[@]}"
+          EOF
+            chmod +x "$BIN/$1-ld"
           }
           link arm-linux-androideabi armv7a-linux-androideabi21
           link aarch64-linux-android aarch64-linux-android21
           link x86_64-linux-android x86_64-linux-android21
           link i686-linux-android i686-linux-android21
+          echo "--- wrapper check ---"
+          cat "$BIN/arm-linux-androideabi-ld"
 
       - name: Set up Rust toolchain
         uses: dtolnay/rust-toolchain@stable
@@ -69,12 +81,6 @@ jobs:
         env:
           ANDROID_NDK_HOME: ${{ steps.ndk.outputs.ndk-path }}
           NDK_HOME: ${{ steps.ndk.outputs.ndk-path }}
-          # cargo-quad-apk picks a linker named *-ld, so rustc assumes raw-ld arguments.
-          # Force the gcc/clang-style flavor since the linker is really clang.
-          CARGO_TARGET_ARMV7_LINUX_ANDROIDEABI_RUSTFLAGS: "-C linker-flavor=gcc"
-          CARGO_TARGET_AARCH64_LINUX_ANDROID_RUSTFLAGS: "-C linker-flavor=gcc"
-          CARGO_TARGET_X86_64_LINUX_ANDROID_RUSTFLAGS: "-C linker-flavor=gcc"
-          CARGO_TARGET_I686_LINUX_ANDROID_RUSTFLAGS: "-C linker-flavor=gcc"
         run: cargo quad-apk build --release
 
       - name: Find APK
