@@ -286,7 +286,7 @@ impl Game {
 
     fn draw(&mut self) {
         let fov = if self.player.scoped { 26.0 } else { 78.0 };
-        let camera = self.player.camera(fov);
+        let camera = self.player.camera(fov.to_radians());
         set_camera(&camera);
 
         self.map.draw();
