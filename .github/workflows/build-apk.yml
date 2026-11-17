@@ -77,6 +77,16 @@ jobs:
       - name: Install cargo-quad-apk
         run: cargo install cargo-quad-apk --locked
 
+      - name: Make android-29 platform point at API 30
+        run: |
+          # cargo-quad-apk 0.1.4 hardcodes android-29, but its generated Java
+          # needs API 30 methods, so give it the API 30 android.jar under that name.
+          SDK="${ANDROID_HOME:-${ANDROID_SDK_ROOT:-/usr/local/lib/android/sdk}}"
+          ls "$SDK/platforms"
+          rm -rf "$SDK/platforms/android-29"
+          cp -r "$SDK/platforms/android-30" "$SDK/platforms/android-29"
+          ls -l "$SDK/platforms/android-29/android.jar"
+
       - name: Set up JDK 8 (cargo-quad-apk needs rt.jar)
         uses: actions/setup-java@v4
         with:
