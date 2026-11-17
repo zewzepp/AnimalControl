@@ -1,6 +1,7 @@
 // src/main.rs
 mod bots;
 mod map;
+mod mobile;
 mod player;
 mod sfx;
 mod weapon;
@@ -8,6 +9,7 @@ mod weapon;
 use macroquad::prelude::*;
 
 use map::{ray_aabb, spread_dir, Map};
+use mobile::{TouchControls, MOBILE_AIM_SCALE};
 use player::Player;
 use sfx::Sfx;
 use weapon::Weapon;
@@ -31,11 +33,12 @@ struct Game {
     score: u32,
     deaths: u32,
     paused: bool,
+    touch: TouchControls,
 }
 
 fn window_conf() -> Conf {
     Conf {
-        window_title: "OMNI ARENA".to_owned(),
+        window_title: "ANIMAL CONTROL".to_owned(),
         window_width: 1280,
         window_height: 720,
         high_dpi: true,
@@ -45,6 +48,10 @@ fn window_conf() -> Conf {
 
 #[macroquad::main(window_conf)]
 async fn main() {
+    // Prevent touches from also generating mouse events (would cause double
+    // input on Android: a tap on a button would also fire a left-click).
+    macroquad::input::set_is_simulating_mouse_with_touch(false);
+
     let sfx = Sfx::load().await;
     let mut game = Game::new(sfx);
 
@@ -82,6 +89,7 @@ impl Game {
             score: 0,
             deaths: 0,
             paused: false,
+            touch: TouchControls::new(),
         }
     }
 
@@ -104,14 +112,30 @@ impl Game {
         }
         self.tracers.retain(|t| t.life > 0.0);
 
-        // --- look
-        let md = mouse_delta_position();
-        let dx = md.x.clamp(-0.5, 0.5);
-        let dy = md.y.clamp(-0.5, 0.5);
+        // --- touch input (must run before player.update)
+        let tf = self.touch.update();
+        self.player.mobile_move = tf.movement;
+        self.player.mobile_jump = tf.jump_pressed;
+        self.player.mobile_slide_active = tf.slide_held;
+        self.player.mobile_fire = tf.fire_held;
+        self.player.mobile_scope = tf.scope_held;
+
+        // --- look: mobile aim (pixel delta → normalized) OR mouse delta
+        let (dx, dy) = if tf.aim_delta.length_squared() > 0.01 {
+            let sw = screen_width().max(1.0);
+            (
+                tf.aim_delta.x / sw * MOBILE_AIM_SCALE,
+                tf.aim_delta.y / sw * MOBILE_AIM_SCALE,
+            )
+        } else {
+            let md = mouse_delta_position();
+            (md.x.clamp(-0.5, 0.5), md.y.clamp(-0.5, 0.5))
+        };
         self.player.look(dx, dy);
 
         // --- scope
-        self.player.scoped = is_mouse_button_down(MouseButton::Right)
+        self.player.scoped = (is_mouse_button_down(MouseButton::Right)
+            || self.player.mobile_scope)
             && self.player.alive
             && !self.player.sliding;
 
@@ -122,7 +146,8 @@ impl Game {
         self.weapon.update(dt);
 
         if self.player.alive {
-            if is_key_pressed(KeyCode::R) {
+            // reload (keyboard R OR mobile reload button)
+            if is_key_pressed(KeyCode::R) || tf.reload_pressed {
                 let was = self.weapon.reloading;
                 self.weapon.start_reload();
                 if was <= 0.0 && self.weapon.reloading > 0.0 {
@@ -133,7 +158,8 @@ impl Game {
                 }
             }
 
-            if is_mouse_button_pressed(MouseButton::Left)
+            // dry-fire auto reload
+            if (is_mouse_button_pressed(MouseButton::Left) || tf.fire_just_pressed)
                 && self.weapon.mag <= 0
                 && self.weapon.reloading <= 0.0
             {
@@ -144,7 +170,10 @@ impl Game {
                 self.weapon.start_reload();
             }
 
-            if is_mouse_button_down(MouseButton::Left) && self.weapon.can_fire() {
+            // fire
+            if (is_mouse_button_down(MouseButton::Left) || self.player.mobile_fire)
+                && self.weapon.can_fire()
+            {
                 self.fire();
             }
         }
@@ -282,6 +311,11 @@ impl Game {
 
         set_default_camera();
         self.draw_hud();
+
+        // --- on-screen touch controls (drawn last so they overlay everything)
+        if !self.paused {
+            self.touch.draw();
+        }
     }
 
     fn draw_hud(&self) {
