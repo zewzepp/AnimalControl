@@ -28,6 +28,14 @@ pub struct Player {
     pub recoil_pitch: f32,
     pub recoil_yaw: f32,
     pub speed_now: f32,
+
+    // --- mobile touch state (set each frame from main)
+    pub mobile_move: Vec2,
+    pub mobile_aim: Vec2,
+    pub mobile_fire: bool,
+    pub mobile_scope: bool,
+    pub mobile_jump: bool,
+    pub mobile_slide_active: bool,
 }
 
 impl Player {
@@ -52,6 +60,12 @@ impl Player {
             recoil_pitch: 0.0,
             recoil_yaw: 0.0,
             speed_now: 0.0,
+            mobile_move: Vec2::ZERO,
+            mobile_aim: Vec2::ZERO,
+            mobile_fire: false,
+            mobile_scope: false,
+            mobile_jump: false,
+            mobile_slide_active: false,
         }
     }
 
@@ -143,7 +157,7 @@ impl Player {
             return;
         }
 
-        // ---------------- input
+        // ---------------- input (keyboard or touch)
         let mut wish = Vec2::ZERO;
         if is_key_down(KeyCode::W) {
             wish.y -= 1.0;
@@ -157,14 +171,24 @@ impl Player {
         if is_key_down(KeyCode::D) {
             wish.x += 1.0;
         }
+
+        // mobile joystick override: screen +y is "down", so invert to make
+        // pressing up on the stick mean "forward"
+        if self.mobile_move.length_squared() > 0.01 {
+            wish = vec2(self.mobile_move.x, -self.mobile_move.y);
+        }
         let wish = wish.normalize_or_zero();
 
         let fwd = vec2(-self.yaw.sin(), -self.yaw.cos());
         let right = vec2(self.yaw.cos(), -self.yaw.sin());
         let world_wish = (fwd * (-wish.y) + right * wish.x).normalize_or_zero();
 
-        let sprint = is_key_down(KeyCode::LeftShift);
-        let crouch_held = is_key_down(KeyCode::LeftControl) || is_key_down(KeyCode::C);
+        // On mobile, pushing the stick hard in any direction counts as sprint.
+        let sprint =
+            is_key_down(KeyCode::LeftShift) || self.mobile_move.length_squared() > 0.5;
+        let crouch_held = is_key_down(KeyCode::LeftControl)
+            || is_key_down(KeyCode::C)
+            || self.mobile_slide_active;
 
         // ---------------- slide start
         if sprint
@@ -225,8 +249,8 @@ impl Player {
             }
         }
 
-        // ---------------- jump
-        if is_key_pressed(KeyCode::Space) && self.on_ground {
+        // ---------------- jump (keyboard OR mobile button)
+        if (is_key_pressed(KeyCode::Space) || self.mobile_jump) && self.on_ground {
             self.vel.y = 8.0;
             self.on_ground = false;
             self.sliding = false;
