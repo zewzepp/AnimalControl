@@ -31,14 +31,22 @@ jobs:
           ndk-version: r26b
           add-to-path: true
 
-      - name: Add legacy binutils names for cargo-quad-apk
+      - name: Add legacy binutils/linker names for cargo-quad-apk
         run: |
           BIN="${{ steps.ndk.outputs.ndk-path }}/toolchains/llvm/prebuilt/linux-x86_64/bin"
-          for t in arm-linux-androideabi aarch64-linux-android x86_64-linux-android i686-linux-android; do
+          link() { # legacy-triple clang-triple
             for tool in ar ranlib strip; do
-              ln -sf "$BIN/llvm-$tool" "$BIN/$t-$tool"
+              ln -sf "$BIN/llvm-$tool" "$BIN/$1-$tool"
             done
-          done
+            # rustc calls the linker with cc-style args, so point ld/gcc/clang at the NDK clang wrapper
+            for tool in ld gcc clang; do
+              ln -sf "$BIN/$2-clang" "$BIN/$1-$tool"
+            done
+          }
+          link arm-linux-androideabi armv7a-linux-androideabi21
+          link aarch64-linux-android aarch64-linux-android21
+          link x86_64-linux-android x86_64-linux-android21
+          link i686-linux-android i686-linux-android21
 
       - name: Set up Rust toolchain
         uses: dtolnay/rust-toolchain@stable
