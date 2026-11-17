@@ -86,6 +86,14 @@ jobs:
           rm -rf "$SDK/platforms/android-29"
           cp -r "$SDK/platforms/android-30" "$SDK/platforms/android-29"
           ls -l "$SDK/platforms/android-29/android.jar"
+          # cargo-quad-apk uses the NEWEST build-tools and needs "dx", which was
+          # removed after 30.0.3. Remove the newer ones so 30.0.3 gets picked.
+          ls "$SDK/build-tools"
+          for d in "$SDK"/build-tools/*; do
+            [ "$(basename "$d")" = "30.0.3" ] || rm -rf "$d"
+          done
+          ls "$SDK/build-tools"
+          ls "$SDK/build-tools/30.0.3" | grep -x dx
 
       - name: Set up JDK 8 (cargo-quad-apk needs rt.jar)
         uses: actions/setup-java@v4
