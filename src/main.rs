@@ -6,6 +6,7 @@ mod player;
 mod sfx;
 mod weapon;
 
+use macroquad::audio::{play_sound, PlaySoundParams};
 use macroquad::prelude::*;
 
 use map::{ray_aabb, spread_dir, Map};
@@ -50,7 +51,7 @@ fn window_conf() -> Conf {
 async fn main() {
     // Prevent touches from also generating mouse events (would cause double
     // input on Android: a tap on a button would also fire a left-click).
-    macroquad::input::set_is_simulating_mouse_with_touch(false);
+    macroquad::input::simulate_mouse_with_touch(false);
 
     let sfx = Sfx::load().await;
     let mut game = Game::new(sfx);

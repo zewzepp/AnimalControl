@@ -226,7 +226,7 @@ impl Player {
 
         // ---------------- horizontal acceleration (omnimovement)
         if !self.sliding {
-            let mut speed = 6.2;
+            let mut speed: f32 = 6.2;
             if sprint {
                 speed = 8.4;
             }
