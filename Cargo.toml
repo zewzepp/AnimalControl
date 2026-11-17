@@ -23,6 +23,8 @@ opt-level = 3
 [package.metadata.android]
 package_name = "rust.animal_control"
 label = "Animal Control"
+android_version = 30
 target_sdk_version = 30
 min_sdk_version = 21
+build_targets = ["aarch64-linux-android", "armv7-linux-androideabi"]
 fullscreen = true
