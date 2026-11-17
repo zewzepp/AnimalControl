@@ -22,7 +22,7 @@ jobs:
       - name: Set up Android SDK
         uses: android-actions/setup-android@v3
         with:
-          packages: 'platform-tools platforms;android-29'
+          packages: 'platform-tools platforms;android-29 build-tools;29.0.3'
 
       - name: Set up Android NDK
         id: ndk
@@ -76,6 +76,12 @@ jobs:
 
       - name: Install cargo-quad-apk
         run: cargo install cargo-quad-apk --locked
+
+      - name: Set up JDK 8 (cargo-quad-apk needs rt.jar)
+        uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: '8'
 
       - name: Build APK (release)
         env:
