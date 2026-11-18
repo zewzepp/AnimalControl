@@ -179,6 +179,9 @@ pub struct Menu {
     drag: Option<usize>,
     drag_off: Vec2,
     selected: usize,
+    /// Was a finger/mouse down last frame? (press edge detection that doesn't
+    /// depend on the OS reporting the `Started` phase)
+    was_down: bool,
 }
 
 const SL_CAMERA: usize = 0;
@@ -244,6 +247,7 @@ impl Menu {
             drag: None,
             drag_off: Vec2::ZERO,
             selected: 0,
+            was_down: true,
         }
     }
 
@@ -252,6 +256,8 @@ impl Menu {
         self.page = Page::Main;
         self.slider = None;
         self.drag = None;
+        // the finger that opened the menu is still down: don't count it as a click
+        self.was_down = true;
     }
 
     /// One labelled slider row. `lx` = label x, `tx`/`tw` = track, `y` = centre.
@@ -301,7 +307,9 @@ impl Menu {
         let w = screen_width();
         let h = screen_height();
         let u = (h / 720.0).min(w / 1000.0).clamp(0.5, 1.5);
-        let p = pointer();
+        let mut p = pointer();
+        p.pressed = p.pos.is_some() && !self.was_down;
+        self.was_down = p.pos.is_some();
 
         if p.pos.is_none() {
             self.slider = None;

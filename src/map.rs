@@ -57,8 +57,10 @@ impl Map {
         Self { boxes, spawns }
     }
 
-    pub fn draw(&self) {
-        // floor slab
+    /// Triangles only (floor + boxes). Drawing all solids first and all lines
+    /// afterwards avoids flipping the GPU batch between triangles and lines
+    /// for every single box.
+    pub fn draw_solid(&self, eye: Vec3, fwd: Vec3) {
         draw_cube(
             vec3(0.0, -0.5, 0.0),
             vec3(45.0, 1.0, 45.0),
@@ -66,15 +68,10 @@ impl Map {
             Color::new(0.13, 0.14, 0.17, 1.0),
         );
 
-        // grid
-        let grid = Color::new(0.20, 0.22, 0.27, 1.0);
-        for i in -22..=22 {
-            let f = i as f32;
-            draw_line_3d(vec3(f, 0.01, -22.0), vec3(f, 0.01, 22.0), grid);
-            draw_line_3d(vec3(-22.0, 0.01, f), vec3(22.0, 0.01, f), grid);
-        }
-
         for b in &self.boxes {
+            if !visible(b, eye, fwd) {
+                continue;
+            }
             let center = (b.min + b.max) * 0.5;
             let size = b.max - b.min;
             let col = if b.max.y > 2.5 {
@@ -83,9 +80,35 @@ impl Map {
                 Color::new(0.37, 0.39, 0.46, 1.0)
             };
             draw_cube(center, size, None, col);
-            draw_cube_wires(center, size * 1.002, Color::new(0.05, 0.06, 0.08, 1.0));
         }
     }
+
+    /// Lines only (floor grid + box outlines).
+    pub fn draw_lines(&self, eye: Vec3, fwd: Vec3) {
+        let grid = Color::new(0.20, 0.22, 0.27, 1.0);
+        for i in -22..=22 {
+            let f = i as f32;
+            draw_line_3d(vec3(f, 0.01, -22.0), vec3(f, 0.01, 22.0), grid);
+            draw_line_3d(vec3(-22.0, 0.01, f), vec3(22.0, 0.01, f), grid);
+        }
+
+        let wire = Color::new(0.05, 0.06, 0.08, 1.0);
+        for b in &self.boxes {
+            if !visible(b, eye, fwd) {
+                continue;
+            }
+            let center = (b.min + b.max) * 0.5;
+            let size = b.max - b.min;
+            draw_cube_wires(center, size * 1.002, wire);
+        }
+    }
+}
+
+/// False only for boxes entirely behind the camera (skips their draw work).
+fn visible(b: &Aabb, eye: Vec3, fwd: Vec3) -> bool {
+    let c = (b.min + b.max) * 0.5;
+    let r = (b.max - b.min).length() * 0.5;
+    (c - eye).dot(fwd) > -r
 }
 
 /// Slab-method ray vs AABB. Returns entry distance.

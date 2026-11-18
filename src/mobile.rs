@@ -7,6 +7,9 @@ use crate::settings::{
 
 const JOY_DEADZONE: f32 = 0.15;
 
+/// Extra pixels around every button that still count as a hit.
+const HIT_SLOP: f32 = 14.0;
+
 /// Multiplier applied to touch aim delta before it reaches `Player::look`.
 /// Bump this if mobile aim feels too slow; lower it if it feels twitchy.
 pub const MOBILE_AIM_SCALE: f32 = 1.0;
@@ -24,6 +27,27 @@ pub struct TouchFrame {
     pub aim_delta: Vec2,         // pixel delta on the aim side this frame
 }
 
+/// What a new finger landed on.
+#[derive(Clone, Copy)]
+enum Target {
+    Menu,
+    Button(usize),
+    Joy,
+    Aim,
+}
+
+/// One-frame edges collected while walking this frame's touches.
+#[derive(Default)]
+struct Pressed {
+    menu: bool,
+    jump: bool,
+    reload: bool,
+    scope: bool,
+    fire: bool,
+    fire_tap: bool,  // fire tapped and released inside one frame
+    slide_tap: bool, // slide tapped and released inside one frame
+}
+
 pub struct TouchControls {
     move_touch_id: Option<u64>,
     move_origin: Vec2,
@@ -32,11 +56,45 @@ pub struct TouchControls {
     aim_touch_id: Option<u64>,
     aim_last: Vec2,
 
-    fire_touch_id: Option<u64>,
-    scope_touch_id: Option<u64>,
-    jump_touch_id: Option<u64>,
-    slide_touch_id: Option<u64>,
-    reload_touch_id: Option<u64>,
+    /// Finger currently holding each button.
+    btn_touch: [Option<u64>; BTN_COUNT],
+
+    /// Finger ids we are already tracking (assigned to a control or ignored).
+    known: Vec<u64>,
+    /// Finger ids that already ended (the OS can keep reporting them).
+    dead: Vec<u64>,
+}
+
+fn grow(r: Rect, m: f32) -> Rect {
+    Rect::new(r.x - m, r.y - m, r.w + 2.0 * m, r.h + 2.0 * m)
+}
+
+fn hit_target(st: &Settings, w: f32, h: f32, pos: Vec2) -> Target {
+    if grow(menu_button_rect(w, h), HIT_SLOP).contains(pos) {
+        return Target::Menu;
+    }
+
+    // Buttons get a little slop; if the slop zones of two buttons overlap, the
+    // button whose centre is closest wins.
+    let mut best: Option<(usize, f32)> = None;
+    for i in 0..BTN_COUNT {
+        let r = st.button_rect(i, w, h);
+        if grow(r, HIT_SLOP).contains(pos) {
+            let c = vec2(r.x + r.w * 0.5, r.y + r.h * 0.5);
+            let d = (pos - c).length_squared();
+            if best.map_or(true, |(_, bd)| d < bd) {
+                best = Some((i, d));
+            }
+        }
+    }
+    if let Some((i, _)) = best {
+        return Target::Button(i);
+    }
+
+    if st.joy_zone(w, h).contains(pos) {
+        return Target::Joy;
+    }
+    Target::Aim
 }
 
 impl TouchControls {
@@ -47,117 +105,129 @@ impl TouchControls {
             move_current: Vec2::ZERO,
             aim_touch_id: None,
             aim_last: Vec2::ZERO,
-            fire_touch_id: None,
-            scope_touch_id: None,
-            jump_touch_id: None,
-            slide_touch_id: None,
-            reload_touch_id: None,
+            btn_touch: [None; BTN_COUNT],
+            known: Vec::new(),
+            dead: Vec::new(),
         }
+    }
+
+    /// A finger just landed (or, with `tap`, landed and lifted within a frame).
+    fn begin(
+        &mut self,
+        id: u64,
+        pos: Vec2,
+        tap: bool,
+        st: &Settings,
+        w: f32,
+        h: f32,
+        pr: &mut Pressed,
+    ) {
+        match hit_target(st, w, h, pos) {
+            Target::Menu => pr.menu = true,
+            Target::Button(i) => {
+                // a second finger on a button that is already held does nothing
+                if !tap && self.btn_touch[i].is_some() {
+                    return;
+                }
+                match i {
+                    BTN_FIRE => {
+                        pr.fire = true;
+                        pr.fire_tap |= tap;
+                    }
+                    BTN_SCOPE => pr.scope = true,
+                    BTN_JUMP => pr.jump = true,
+                    BTN_RELOAD => pr.reload = true,
+                    BTN_SLIDE => pr.slide_tap |= tap,
+                    _ => {}
+                }
+                if !tap {
+                    self.btn_touch[i] = Some(id);
+                }
+            }
+            Target::Joy => {
+                if !tap && self.move_touch_id.is_none() {
+                    self.move_touch_id = Some(id);
+                    self.move_origin = pos;
+                    self.move_current = pos;
+                }
+            }
+            Target::Aim => {
+                if !tap && self.aim_touch_id.is_none() {
+                    self.aim_touch_id = Some(id);
+                    self.aim_last = pos;
+                }
+            }
+        }
+    }
+
+    /// A finger lifted: free whatever it was holding.
+    fn release(&mut self, id: u64) {
+        if self.move_touch_id == Some(id) {
+            self.move_touch_id = None;
+        }
+        if self.aim_touch_id == Some(id) {
+            self.aim_touch_id = None;
+        }
+        for slot in self.btn_touch.iter_mut() {
+            if *slot == Some(id) {
+                *slot = None;
+            }
+        }
+        self.known.retain(|k| *k != id);
     }
 
     pub fn update(&mut self, st: &Settings) -> TouchFrame {
         let w = screen_width();
         let h = screen_height();
-        // The stick only starts inside its own box (bottom-left by default), so
-        // it can never swallow buttons or the aiming area.
-        let joy_zone = st.joy_zone(w, h);
-        let joy_radius = st.joy_radius();
 
-        let fire_rect = st.button_rect(BTN_FIRE, w, h);
-        let scope_rect = st.button_rect(BTN_SCOPE, w, h);
-        let jump_rect = st.button_rect(BTN_JUMP, w, h);
-        let slide_rect = st.button_rect(BTN_SLIDE, w, h);
-        let reload_rect = st.button_rect(BTN_RELOAD, w, h);
-        let menu_rect = menu_button_rect(w, h);
-        let mut menu_pressed = false;
-
-        let mut jump_pressed = false;
-        let mut reload_pressed = false;
-        let mut fire_just_pressed = false;
-        let mut scope_pressed = false;
+        let mut pr = Pressed::default();
         let mut aim_delta = Vec2::ZERO;
-        let mut active_ids: Vec<u64> = Vec::new();
+        let mut seen: Vec<u64> = Vec::new();
 
+        // Touch events arrive faster than frames, so a finger can go
+        // Started -> Moved (or even -> Ended) before we ever look at it. So we
+        // never rely on seeing the `Started` phase: any finger id we are not
+        // tracking yet is a new finger, whatever phase it reports.
         for touch in touches() {
             let id = touch.id;
             let pos = touch.position;
-            active_ids.push(id);
+            seen.push(id);
 
-            match touch.phase {
-                TouchPhase::Started => {
-                    let on_button = fire_rect.contains(pos)
-                        || scope_rect.contains(pos)
-                        || jump_rect.contains(pos)
-                        || slide_rect.contains(pos)
-                        || reload_rect.contains(pos);
+            if matches!(touch.phase, TouchPhase::Ended | TouchPhase::Cancelled) {
+                if self.dead.contains(&id) {
+                    continue; // stale repeat of an ended touch
+                }
+                if !self.known.contains(&id) {
+                    // tapped and released inside a single frame: still a tap
+                    self.begin(id, pos, true, st, w, h, &mut pr);
+                }
+                self.release(id);
+                self.dead.push(id);
+                continue;
+            }
 
-                    if menu_rect.contains(pos) {
-                        menu_pressed = true;
-                    } else if fire_rect.contains(pos) && self.fire_touch_id.is_none() {
-                        self.fire_touch_id = Some(id);
-                        fire_just_pressed = true;
-                    } else if scope_rect.contains(pos) && self.scope_touch_id.is_none() {
-                        self.scope_touch_id = Some(id);
-                        scope_pressed = true;
-                    } else if jump_rect.contains(pos) && self.jump_touch_id.is_none() {
-                        self.jump_touch_id = Some(id);
-                        jump_pressed = true;
-                    } else if slide_rect.contains(pos) && self.slide_touch_id.is_none() {
-                        self.slide_touch_id = Some(id);
-                    } else if reload_rect.contains(pos) && self.reload_touch_id.is_none() {
-                        self.reload_touch_id = Some(id);
-                        reload_pressed = true;
-                    } else if on_button {
-                        // a second finger on an already-held button: ignore it
-                    } else if joy_zone.contains(pos) && self.move_touch_id.is_none() {
-                        self.move_touch_id = Some(id);
-                        self.move_origin = pos;
-                        self.move_current = pos;
-                    } else if self.aim_touch_id.is_none() {
-                        // anywhere else on screen = look around
-                        self.aim_touch_id = Some(id);
-                        self.aim_last = pos;
-                    }
-                }
-                TouchPhase::Moved | TouchPhase::Stationary => {
-                    if Some(id) == self.move_touch_id {
-                        self.move_current = pos;
-                    } else if Some(id) == self.aim_touch_id {
-                        aim_delta += pos - self.aim_last;
-                        self.aim_last = pos;
-                    }
-                }
-                TouchPhase::Ended | TouchPhase::Cancelled => {
-                    // Release immediately, and don't count this touch as active
-                    // (macroquad can keep reporting ended touches for a while).
-                    for slot in [
-                        &mut self.move_touch_id,
-                        &mut self.aim_touch_id,
-                        &mut self.fire_touch_id,
-                        &mut self.scope_touch_id,
-                        &mut self.jump_touch_id,
-                        &mut self.slide_touch_id,
-                        &mut self.reload_touch_id,
-                    ] {
-                        if *slot == Some(id) {
-                            *slot = None;
-                        }
-                    }
-                    active_ids.pop();
-                }
+            // live finger (the id may have been reused by a new touch)
+            self.dead.retain(|d| *d != id);
+            if !self.known.contains(&id) {
+                self.known.push(id);
+                self.begin(id, pos, false, st, w, h, &mut pr);
+            } else if self.move_touch_id == Some(id) {
+                self.move_current = pos;
+            } else if self.aim_touch_id == Some(id) {
+                aim_delta += pos - self.aim_last;
+                self.aim_last = pos;
             }
         }
 
-        // Release controls whose touch ID is no longer active.
-        release_if_gone(&mut self.move_touch_id, &active_ids);
-        release_if_gone(&mut self.aim_touch_id, &active_ids);
-        release_if_gone(&mut self.fire_touch_id, &active_ids);
-        release_if_gone(&mut self.scope_touch_id, &active_ids);
-        release_if_gone(&mut self.jump_touch_id, &active_ids);
-        release_if_gone(&mut self.slide_touch_id, &active_ids);
-        release_if_gone(&mut self.reload_touch_id, &active_ids);
+        // Fingers that vanished without an Ended event.
+        let gone: Vec<u64> = self.known.iter().copied().filter(|k| !seen.contains(k)).collect();
+        for id in gone {
+            self.release(id);
+        }
+        self.dead.retain(|d| seen.contains(d));
 
         // Movement vector from joystick.
+        let joy_radius = st.joy_radius();
         let mut movement = Vec2::ZERO;
         if self.move_touch_id.is_some() {
             let offset = self.move_current - self.move_origin;
@@ -170,27 +240,34 @@ impl TouchControls {
 
         TouchFrame {
             movement,
-            jump_pressed,
-            slide_held: self.slide_touch_id.is_some(),
-            reload_pressed,
-            fire_held: self.fire_touch_id.is_some(),
-            fire_just_pressed,
-            scope_held: self.scope_touch_id.is_some(),
-            scope_pressed,
-            menu_pressed,
+            jump_pressed: pr.jump,
+            slide_held: self.btn_touch[BTN_SLIDE].is_some() || pr.slide_tap,
+            reload_pressed: pr.reload,
+            fire_held: self.btn_touch[BTN_FIRE].is_some() || pr.fire_tap,
+            fire_just_pressed: pr.fire,
+            scope_held: self.btn_touch[BTN_SCOPE].is_some(),
+            scope_pressed: pr.scope,
+            menu_pressed: pr.menu,
             aim_delta,
         }
     }
 
-    /// Forget every held control (used when the menu opens/closes).
+    /// Forget every held control (used when the menu opens/closes). Fingers
+    /// that are still down at that moment are ignored until they lift, so the
+    /// finger that tapped MENU/RESUME doesn't also start aiming.
     pub fn reset(&mut self) {
         self.move_touch_id = None;
         self.aim_touch_id = None;
-        self.fire_touch_id = None;
-        self.scope_touch_id = None;
-        self.jump_touch_id = None;
-        self.slide_touch_id = None;
-        self.reload_touch_id = None;
+        self.btn_touch = [None; BTN_COUNT];
+        self.known.clear();
+        self.dead.clear();
+        for t in touches() {
+            if matches!(t.phase, TouchPhase::Ended | TouchPhase::Cancelled) {
+                self.dead.push(t.id);
+            } else {
+                self.known.push(t.id);
+            }
+        }
     }
 
     pub fn draw(&self, st: &Settings) {
@@ -219,18 +296,11 @@ impl TouchControls {
             draw_circle(c.x, c.y, 26.0 * st.joy_scale, Color::new(1.0, 1.0, 1.0, 0.12 * op));
         }
 
-        let active = [
-            self.fire_touch_id.is_some(),
-            self.scope_touch_id.is_some(),
-            self.jump_touch_id.is_some(),
-            self.slide_touch_id.is_some(),
-            self.reload_touch_id.is_some(),
-        ];
         for i in 0..BTN_COUNT {
             Self::draw_button(
                 st.button_rect(i, w, h),
                 BTN_LABELS[i],
-                active[i],
+                self.btn_touch[i].is_some(),
                 crate::settings::btn_color(i),
                 op,
             );
@@ -261,15 +331,8 @@ impl TouchControls {
     }
 }
 
-/// Small MENU button under the FPS counter (top-right).
+/// MENU button under the FPS counter (top-right). Bigger than before so it is
+/// easy to hit.
 pub fn menu_button_rect(w: f32, _h: f32) -> Rect {
-    Rect::new(w - 130.0, 60.0, 100.0, 44.0)
-}
-
-fn release_if_gone(slot: &mut Option<u64>, active: &[u64]) {
-    if let Some(id) = *slot {
-        if !active.contains(&id) {
-            *slot = None;
-        }
-    }
+    Rect::new(w - 150.0, 56.0, 120.0, 52.0)
 }

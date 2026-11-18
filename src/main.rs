@@ -33,12 +33,47 @@ struct Game {
     hitmarker: f32,
     damage_flash: f32,
     muzzle: f32,
+    /// 0 = not scoped, 1 = fully scoped (moves over ~0.3s for a smooth zoom)
+    zoom: f32,
+    vignette: Texture2D,
     score: u32,
     deaths: u32,
     paused: bool,
     touch: TouchControls,
     settings: Settings,
     menu: Menu,
+}
+
+/// Scope zoom length in seconds.
+const ZOOM_TIME: f32 = 0.3;
+const FOV_NORMAL: f32 = 78.0;
+const FOV_SCOPED: f32 = 26.0;
+/// The vignette quad is drawn this many screen-heights wide.
+const VIGNETTE_SPAN: f32 = 2.6;
+
+fn ease(t: f32) -> f32 {
+    let t = t.clamp(0.0, 1.0);
+    t * t * (3.0 - 2.0 * t)
+}
+
+/// Soft radial darkening, built once at startup. Transparent in the middle,
+/// fading to dark towards the edges (never fully black).
+fn make_vignette() -> Texture2D {
+    const N: u16 = 256;
+    let mut img = Image::gen_image_color(N, N, Color::new(0.0, 0.0, 0.0, 0.0));
+    for y in 0..N as u32 {
+        for x in 0..N as u32 {
+            let dx = (x as f32 + 0.5) / N as f32 - 0.5;
+            let dy = (y as f32 + 0.5) / N as f32 - 0.5;
+            // distance from centre measured in screen heights
+            let d = (dx * dx + dy * dy).sqrt() * VIGNETTE_SPAN;
+            let a = ease((d - 0.25) / 0.50) * 0.85;
+            img.set_pixel(x, y, Color::new(0.0, 0.0, 0.0, a));
+        }
+    }
+    let tex = Texture2D::from_image(&img);
+    tex.set_filter(FilterMode::Linear);
+    tex
 }
 
 fn window_conf() -> Conf {
@@ -91,6 +126,8 @@ impl Game {
             hitmarker: 0.0,
             damage_flash: 0.0,
             muzzle: 0.0,
+            zoom: 0.0,
+            vignette: make_vignette(),
             score: 0,
             deaths: 0,
             paused: false,
@@ -178,11 +215,9 @@ impl Game {
             let md = mouse_delta_position();
             (md.x.clamp(-0.5, 0.5), md.y.clamp(-0.5, 0.5))
         };
-        let sens = if self.player.scoped {
-            self.settings.sens_scope
-        } else {
-            self.settings.sens_camera
-        };
+        let ez = ease(self.zoom);
+        let sens = self.settings.sens_camera
+            + (self.settings.sens_scope - self.settings.sens_camera) * ez;
         self.player.look(dx * sens, dy * sens);
 
         // --- scope
@@ -190,6 +225,15 @@ impl Game {
             || self.player.mobile_scope)
             && self.player.alive
             && !self.player.sliding;
+
+        // smooth zoom in/out
+        let zoom_target = if self.player.scoped { 1.0 } else { 0.0 };
+        let zoom_step = dt / ZOOM_TIME;
+        if self.zoom < zoom_target {
+            self.zoom = (self.zoom + zoom_step).min(zoom_target);
+        } else {
+            self.zoom = (self.zoom - zoom_step).max(zoom_target);
+        }
 
         // --- player movement
         let was_on_ground = self.player.on_ground;
@@ -339,15 +383,21 @@ impl Game {
             self.player.pitch = 0.0;
         }
 
-        let fov: f32 = if self.player.scoped { 26.0 } else { 78.0 };
+        let fov: f32 = FOV_NORMAL + (FOV_SCOPED - FOV_NORMAL) * ease(self.zoom);
         let camera = self.player.camera(fov.to_radians());
         set_camera(&camera);
 
-        self.map.draw();
+        let cam_pos = self.player.eye_pos();
+        let cam_fwd = self.player.aim_dir();
+
+        // triangles first, lines last (fewer GPU batch switches)
+        self.map.draw_solid(cam_pos, cam_fwd);
 
         for bot in &self.bots {
             bot.draw();
         }
+
+        self.map.draw_lines(cam_pos, cam_fwd);
 
         for t in &self.tracers {
             draw_line_3d(t.a, t.b, Color::new(1.0, 0.9, 0.5, 0.9));
@@ -379,27 +429,37 @@ impl Game {
         let cx = w * 0.5;
         let cy = h * 0.5;
 
-        // ---------- scope overlay
-        if self.player.scoped {
-            let r = h * 0.42;
-            let black = Color::new(0.0, 0.0, 0.0, 1.0);
-            draw_rectangle(0.0, 0.0, w, cy - r, black);
-            draw_rectangle(0.0, cy + r, w, h - (cy + r), black);
-            draw_rectangle(0.0, cy - r, cx - r, 2.0 * r, black);
-            draw_rectangle(cx + r, cy - r, w - (cx + r), 2.0 * r, black);
-            draw_circle_lines(cx, cy, r, 3.0, Color::new(0.05, 0.05, 0.05, 1.0));
+        // ---------- scope overlay: soft vignette + thin ring, fading in with the zoom
+        let ez = ease(self.zoom);
+        if ez > 0.001 {
+            let side = h * VIGNETTE_SPAN;
+            draw_texture_ex(
+                &self.vignette,
+                cx - side * 0.5,
+                cy - side * 0.5,
+                Color::new(1.0, 1.0, 1.0, ez),
+                DrawTextureParams {
+                    dest_size: Some(vec2(side, side)),
+                    ..Default::default()
+                },
+            );
+            // ultra-wide screens: fill anything the vignette square doesn't reach
+            if w > side {
+                let edge = Color::new(0.0, 0.0, 0.0, 0.85 * ez);
+                let x0 = cx - side * 0.5;
+                draw_rectangle(0.0, 0.0, x0, h, edge);
+                draw_rectangle(cx + side * 0.5, 0.0, w - (cx + side * 0.5), h, edge);
+            }
 
-            let c = Color::new(0.05, 0.05, 0.05, 1.0);
-            draw_line(cx - r, cy, cx - 8.0, cy, 1.5, c);
-            draw_line(cx + 8.0, cy, cx + r, cy, 1.5, c);
-            draw_line(cx, cy - r, cx, cy - 8.0, 1.5, c);
-            draw_line(cx, cy + 8.0, cx, cy + r, 1.5, c);
-            draw_circle(cx, cy, 1.8, Color::new(0.9, 0.1, 0.1, 1.0));
-        } else {
-            // ---------- dynamic crosshair
+            draw_circle_lines(cx, cy, h * 0.42, 2.0, Color::new(0.0, 0.0, 0.0, 0.7 * ez));
+            draw_circle(cx, cy, 1.8, Color::new(0.9, 0.1, 0.1, ez));
+        }
+
+        // ---------- dynamic crosshair (fades out as the scope fades in)
+        if ez < 0.999 {
             let gap = 5.0 + self.weapon.bloom * 900.0;
             let len = 9.0;
-            let c = Color::new(0.1, 1.0, 0.6, 0.9);
+            let c = Color::new(0.1, 1.0, 0.6, 0.9 * (1.0 - ez));
             draw_line(cx - gap - len, cy, cx - gap, cy, 2.0, c);
             draw_line(cx + gap, cy, cx + gap + len, cy, 2.0, c);
             draw_line(cx, cy - gap - len, cx, cy - gap, 2.0, c);
@@ -408,7 +468,7 @@ impl Game {
         }
 
         // ---------- muzzle flash (screen centre = exactly on the crosshair)
-        if self.muzzle > 0.0 && !self.player.scoped {
+        if self.muzzle > 0.0 && ez < 0.5 {
             let k = (self.muzzle / 0.06).clamp(0.0, 1.0);
             let outer = Color::new(1.0, 0.75, 0.2, 0.9 * k);
             let core = Color::new(1.0, 0.95, 0.7, k);
