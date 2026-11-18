@@ -172,10 +172,10 @@ impl Player {
             wish.x += 1.0;
         }
 
-        // mobile joystick override: screen +y is "down", so invert to make
-        // pressing up on the stick mean "forward"
+        // mobile joystick override: same convention as the keyboard above
+        // (wish.y < 0 = forward), and screen -y is "up" on the stick
         if self.mobile_move.length_squared() > 0.01 {
-            wish = vec2(self.mobile_move.x, -self.mobile_move.y);
+            wish = vec2(self.mobile_move.x, self.mobile_move.y);
         }
         let wish = wish.normalize_or_zero();
 

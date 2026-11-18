@@ -16,6 +16,7 @@ pub struct TouchFrame {
     pub fire_held: bool,
     pub fire_just_pressed: bool, // edge
     pub scope_held: bool,
+    pub scope_pressed: bool,     // edge (used for toggle scope)
     pub aim_delta: Vec2,         // pixel delta on the aim side this frame
 }
 
@@ -64,6 +65,7 @@ impl TouchControls {
         let mut jump_pressed = false;
         let mut reload_pressed = false;
         let mut fire_just_pressed = false;
+        let mut scope_pressed = false;
         let mut aim_delta = Vec2::ZERO;
         let mut active_ids: Vec<u64> = Vec::new();
 
@@ -83,6 +85,7 @@ impl TouchControls {
                         fire_just_pressed = true;
                     } else if scope_rect.contains(pos) && self.scope_touch_id.is_none() {
                         self.scope_touch_id = Some(id);
+                        scope_pressed = true;
                     } else if jump_rect.contains(pos) && self.jump_touch_id.is_none() {
                         self.jump_touch_id = Some(id);
                         jump_pressed = true;
@@ -153,6 +156,7 @@ impl TouchControls {
             fire_held: self.fire_touch_id.is_some(),
             fire_just_pressed,
             scope_held: self.scope_touch_id.is_some(),
+            scope_pressed,
             aim_delta,
         }
     }

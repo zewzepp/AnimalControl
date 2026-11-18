@@ -3,6 +3,10 @@ use macroquad::prelude::*;
 
 use crate::map::{los_clear, move_circle, ray_aabb, spread_dir, Aabb, Map};
 
+/// Bot aim error (radians of random cone). Raise these to make bots miss more.
+const BOT_SPREAD_BASE: f32 = 0.08;
+const BOT_SPREAD_PER_METER: f32 = 0.006;
+
 pub struct Shot {
     pub from: Vec3,
     pub to: Vec3,
@@ -154,7 +158,7 @@ impl Bot {
         if los && dist < 40.0 && self.fire_t <= 0.0 {
             self.fire_t = macroquad::rand::gen_range(0.35f32, 0.9);
 
-            let spread = 0.02 + dist * 0.0012;
+            let spread = BOT_SPREAD_BASE + dist * BOT_SPREAD_PER_METER;
             let d = spread_dir(dir, spread);
 
             let mut best_t = f32::INFINITY;

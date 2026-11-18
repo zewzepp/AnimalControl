@@ -73,7 +73,7 @@ impl Game {
         let spawns = map.spawns.clone();
 
         let player = Player::new(spawns[0]);
-        let bots = (1..=4)
+        let bots = (1..=1)
             .map(|i| bots::Bot::new(spawns[i % spawns.len()]))
             .collect();
 
@@ -119,7 +119,10 @@ impl Game {
         self.player.mobile_jump = tf.jump_pressed;
         self.player.mobile_slide_active = tf.slide_held;
         self.player.mobile_fire = tf.fire_held;
-        self.player.mobile_scope = tf.scope_held;
+        // scope is a toggle: tap SCOPE to zoom in, tap again to zoom out
+        if tf.scope_pressed {
+            self.player.mobile_scope = !self.player.mobile_scope;
+        }
 
         // --- look: mobile aim (pixel delta → normalized) OR mouse delta
         let (dx, dy) = if tf.aim_delta.length_squared() > 0.01 {
@@ -442,21 +445,8 @@ impl Game {
             Color::new(1.0, 1.0, 1.0, 0.6),
         );
 
-        // ---------- TEMP debug (remove once 3D renders)
-        {
-            let e = self.player.eye_pos();
-            draw_text(
-                &format!(
-                    "eye {:.1} {:.1} {:.1}  yaw {:.2} pitch {:.2}  bots {}  {}x{}",
-                    e.x, e.y, e.z, self.player.yaw, self.player.pitch,
-                    self.bots.len(), w as i32, h as i32
-                ),
-                40.0, 110.0, 20.0, Color::new(1.0, 1.0, 0.3, 1.0),
-            );
-        }
-
         // ---------- state hints
-        let mut y = 150.0;
+        let mut y = 130.0;
         let mut hints: Vec<&str> = Vec::new();
         if self.player.sliding {
             hints.push("SLIDING");
