@@ -31,7 +31,7 @@ impl Weapon {
     pub fn fire(&mut self) {
         self.mag -= 1;
         self.cooldown = self.fire_interval;
-        self.bloom = (self.bloom + 0.0075).min(0.045);
+        self.bloom = (self.bloom + 0.004).min(0.025);
     }
 
     pub fn start_reload(&mut self) {
@@ -61,9 +61,9 @@ impl Weapon {
         if scoped {
             return 0.0;
         }
-        let mut s = 0.003 + self.bloom;
+        let mut s = 0.0015 + self.bloom;
         if sliding {
-            s += 0.02;
+            s += 0.008;
         }
         s
     }

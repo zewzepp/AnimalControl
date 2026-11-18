@@ -24,6 +24,8 @@ pub struct Player {
     pub eye: f32,
     pub bob: f32,
     pub bob_y: f32,
+    pub bob_amp: f32,
+    pub slide_boost: f32,
     pub land: f32,
     pub recoil_pitch: f32,
     pub recoil_yaw: f32,
@@ -56,6 +58,8 @@ impl Player {
             eye: STAND_H - 0.12,
             bob: 0.0,
             bob_y: 0.0,
+            bob_amp: 0.0,
+            slide_boost: 0.0,
             land: 0.0,
             recoil_pitch: 0.0,
             recoil_yaw: 0.0,
@@ -144,10 +148,13 @@ impl Player {
 
     pub fn update(&mut self, dt: f32, map: &Map) {
         // recoil recovery
-        let k = (1.0 - 9.0 * dt).max(0.0);
+        let k = (-8.0 * dt).exp();
         self.recoil_pitch *= k;
         self.recoil_yaw *= k;
-        self.land = (self.land - dt * 0.9).max(0.0);
+        self.land *= (-7.0 * dt).exp();
+        if self.land < 0.001 {
+            self.land = 0.0;
+        }
 
         if !self.alive {
             self.respawn_t -= dt;
@@ -201,10 +208,8 @@ impl Player {
             if hs > 7.0 {
                 self.sliding = true;
                 self.slide_t = 0.85;
-                let dir = vec2(self.vel.x, self.vel.z).normalize_or_zero();
-                let boost = (hs * 1.25).clamp(9.5, 14.0);
-                self.vel.x = dir.x * boost;
-                self.vel.z = dir.y * boost;
+                // speed ramps up to the boost over the first ~0.15s instead of snapping
+                self.slide_boost = (hs * 1.25).clamp(9.5, 14.0);
             }
         }
 
@@ -214,7 +219,11 @@ impl Player {
         if self.sliding {
             self.slide_t -= dt;
             let mut hs = vec2(self.vel.x, self.vel.z).length();
-            hs -= 3.5 * dt;
+            if self.slide_t > 0.70 {
+                hs += (self.slide_boost - hs) * (1.0 - (-16.0 * dt).exp());
+            } else {
+                hs -= 3.5 * dt;
+            }
             if self.slide_t <= 0.0 || hs < 4.5 || !self.on_ground {
                 self.sliding = false;
             } else {
@@ -240,12 +249,20 @@ impl Player {
             let target = world_wish * speed;
             let dvx = target.x - self.vel.x;
             let dvz = target.y - self.vel.z;
-            let max_dv = if self.on_ground { 55.0 * dt } else { 20.0 * dt };
-            let len = (dvx * dvx + dvz * dvz).sqrt();
-            if len > 1e-5 {
-                let f = (max_dv / len).min(1.0);
-                self.vel.x += dvx * f;
-                self.vel.z += dvz * f;
+            // exponential approach to the target velocity: speeds up and slows
+            // down gradually (stopping is a touch slower than starting)
+            let speeding_up = target.length_squared() > 1e-4;
+            let rate = if self.on_ground {
+                if speeding_up { 9.0 } else { 7.0 }
+            } else {
+                4.5
+            };
+            let f = 1.0 - (-rate * dt).exp();
+            self.vel.x += dvx * f;
+            self.vel.z += dvz * f;
+            if !speeding_up && self.on_ground && self.vel.x.abs() + self.vel.z.abs() < 0.08 {
+                self.vel.x = 0.0;
+                self.vel.z = 0.0;
             }
         }
 
@@ -271,12 +288,12 @@ impl Player {
         self.on_ground = grounded;
 
         if grounded && !was_ground {
-            self.land = (impact * 0.012).clamp(0.03, 0.16);
+            self.land = (impact * 0.008).clamp(0.02, 0.10);
         }
 
         // ---------------- eye height smoothing
         let target_eye = self.height() - 0.12;
-        self.eye += (target_eye - self.eye) * (1.0 - (-14.0 * dt).exp());
+        self.eye += (target_eye - self.eye) * (1.0 - (-9.0 * dt).exp());
 
         // ---------------- head bob
         let hs = vec2(self.vel.x, self.vel.z).length();
@@ -288,11 +305,13 @@ impl Player {
             self.bob += dt * 2.0;
         }
 
-        let bob_amt = if self.on_ground && !self.sliding {
+        let bob_target = if self.on_ground && !self.sliding {
             (hs / 8.0).min(1.0) * 0.035
         } else {
             0.0
         };
-        self.bob_y = (self.bob * 2.0).sin() * bob_amt;
+        // fade the bob in/out instead of snapping when you start/stop
+        self.bob_amp += (bob_target - self.bob_amp) * (1.0 - (-8.0 * dt).exp());
+        self.bob_y = (self.bob * 2.0).sin() * self.bob_amp;
     }
 }

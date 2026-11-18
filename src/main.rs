@@ -35,6 +35,9 @@ struct Game {
     muzzle: f32,
     /// 0 = not scoped, 1 = fully scoped (moves over ~0.3s for a smooth zoom)
     zoom: f32,
+    /// smoothed look delta (screen-normalized), for fluid camera turns
+    look_sx: f32,
+    look_sy: f32,
     vignette: Texture2D,
     score: u32,
     deaths: u32,
@@ -45,15 +48,16 @@ struct Game {
 }
 
 /// Scope zoom length in seconds.
-const ZOOM_TIME: f32 = 0.3;
+const ZOOM_TIME: f32 = 0.4;
 const FOV_NORMAL: f32 = 78.0;
 const FOV_SCOPED: f32 = 26.0;
 /// The vignette quad is drawn this many screen-heights wide.
 const VIGNETTE_SPAN: f32 = 2.6;
 
 fn ease(t: f32) -> f32 {
+    // smootherstep: gentler start and end than smoothstep
     let t = t.clamp(0.0, 1.0);
-    t * t * (3.0 - 2.0 * t)
+    t * t * t * (t * (t * 6.0 - 15.0) + 10.0)
 }
 
 /// Soft radial darkening, built once at startup. Transparent in the middle,
@@ -127,6 +131,8 @@ impl Game {
             damage_flash: 0.0,
             muzzle: 0.0,
             zoom: 0.0,
+            look_sx: 0.0,
+            look_sy: 0.0,
             vignette: make_vignette(),
             score: 0,
             deaths: 0,
@@ -215,6 +221,12 @@ impl Game {
             let md = mouse_delta_position();
             (md.x.clamp(-0.5, 0.5), md.y.clamp(-0.5, 0.5))
         };
+        // exponential smoothing of the look delta (frame-rate independent);
+        // the tail keeps decaying after the finger lifts, which feels fluid
+        let a = 1.0 - (-24.0 * dt).exp();
+        self.look_sx += (dx - self.look_sx) * a;
+        self.look_sy += (dy - self.look_sy) * a;
+        let (dx, dy) = (self.look_sx, self.look_sy);
         let ez = ease(self.zoom);
         let sens = self.settings.sens_camera
             + (self.settings.sens_scope - self.settings.sens_camera) * ez;
@@ -223,8 +235,7 @@ impl Game {
         // --- scope
         self.player.scoped = (is_mouse_button_down(MouseButton::Right)
             || self.player.mobile_scope)
-            && self.player.alive
-            && !self.player.sliding;
+            && self.player.alive;
 
         // smooth zoom in/out
         let zoom_target = if self.player.scoped { 1.0 } else { 0.0 };
@@ -258,6 +269,7 @@ impl Game {
                 self.weapon.start_reload();
                 if was <= 0.0 && self.weapon.reloading > 0.0 {
                     self.play(&self.sfx.reload, 0.5);
+                    self.player.mobile_scope = false;
                 }
             }
 
@@ -268,6 +280,9 @@ impl Game {
             {
                 self.play(&self.sfx.empty, 0.4);
                 self.weapon.start_reload();
+                if self.weapon.reloading > 0.0 {
+                    self.player.mobile_scope = false;
+                }
             }
 
             // fire

@@ -43,8 +43,10 @@ impl Bot {
 
     pub fn bounds(&self) -> Aabb {
         Aabb {
-            min: self.pos + vec3(-0.4, 0.0, -0.4),
-            max: self.pos + vec3(0.4, 1.75, 0.4),
+            // generous hit volume: wider than the body and tall enough to
+            // include the head cube (top at ~2.2), so close shots register
+            min: self.pos + vec3(-0.6, 0.0, -0.6),
+            max: self.pos + vec3(0.6, 2.3, 0.6),
         }
     }
 
