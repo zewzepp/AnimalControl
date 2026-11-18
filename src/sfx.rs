@@ -55,10 +55,13 @@ impl Sfx {
 // ---------------------------------------------------------------- wav encoder
 
 fn wav(samples: &[f32]) -> Vec<u8> {
-    let mut data = Vec::with_capacity(samples.len() * 2);
+    // Stereo 16-bit 44.1 kHz: the format every macroquad/quad-snd backend
+    // (including Android's OpenSL ES mixer) is happiest with.
+    let mut data = Vec::with_capacity(samples.len() * 4);
     for s in samples {
         let v = (s.clamp(-1.0, 1.0) * 32767.0) as i16;
-        data.extend_from_slice(&v.to_le_bytes());
+        data.extend_from_slice(&v.to_le_bytes()); // left
+        data.extend_from_slice(&v.to_le_bytes()); // right
     }
 
     let mut out = Vec::with_capacity(44 + data.len());
@@ -68,10 +71,10 @@ fn wav(samples: &[f32]) -> Vec<u8> {
     out.extend_from_slice(b"fmt ");
     out.extend_from_slice(&16u32.to_le_bytes());
     out.extend_from_slice(&1u16.to_le_bytes()); // PCM
-    out.extend_from_slice(&1u16.to_le_bytes()); // mono
+    out.extend_from_slice(&2u16.to_le_bytes()); // stereo
     out.extend_from_slice(&(SR as u32).to_le_bytes());
-    out.extend_from_slice(&((SR as u32) * 2).to_le_bytes()); // byte rate
-    out.extend_from_slice(&2u16.to_le_bytes()); // block align
+    out.extend_from_slice(&((SR as u32) * 4).to_le_bytes()); // byte rate
+    out.extend_from_slice(&4u16.to_le_bytes()); // block align
     out.extend_from_slice(&16u16.to_le_bytes()); // bits per sample
     out.extend_from_slice(b"data");
     out.extend_from_slice(&(data.len() as u32).to_le_bytes());

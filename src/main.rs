@@ -110,7 +110,7 @@ impl Game {
 
     fn open_menu(&mut self) {
         self.paused = true;
-        self.menu.editing = false;
+        self.menu.reset();
         self.touch.reset();
         let _ = set_cursor_grab(false);
         let _ = show_mouse(true);
@@ -118,7 +118,7 @@ impl Game {
 
     fn resume(&mut self) {
         self.paused = false;
-        self.menu.editing = false;
+        self.menu.reset();
         self.touch.reset();
         let _ = set_cursor_grab(true);
         let _ = show_mouse(false);
@@ -178,7 +178,12 @@ impl Game {
             let md = mouse_delta_position();
             (md.x.clamp(-0.5, 0.5), md.y.clamp(-0.5, 0.5))
         };
-        self.player.look(dx * self.settings.sensitivity, dy * self.settings.sensitivity);
+        let sens = if self.player.scoped {
+            self.settings.sens_scope
+        } else {
+            self.settings.sens_camera
+        };
+        self.player.look(dx * sens, dy * sens);
 
         // --- scope
         self.player.scoped = (is_mouse_button_down(MouseButton::Right)
@@ -258,7 +263,7 @@ impl Game {
 
     fn fire(&mut self) {
         self.weapon.fire();
-        self.muzzle = 0.045;
+        self.muzzle = 0.06;
 
         self.player.recoil_pitch += 0.013 + macroquad::rand::gen_range(0.0f32, 0.008);
         self.player.recoil_yaw += macroquad::rand::gen_range(-0.01f32, 0.01);
@@ -348,20 +353,6 @@ impl Game {
             draw_line_3d(t.a, t.b, Color::new(1.0, 0.9, 0.5, 0.9));
         }
 
-        if self.muzzle > 0.0 && !self.player.scoped {
-            // small flash at the gun, low and to the right so it never blocks the view
-            let e = self.player.eye_pos();
-            let d = self.player.aim_dir();
-            let right = d.cross(vec3(0.0, 1.0, 0.0)).normalize_or_zero();
-            let up = right.cross(d);
-            draw_cube(
-                e + d * 1.2 + right * 0.34 - up * 0.28,
-                Vec3::splat(0.05),
-                None,
-                Color::new(1.0, 0.85, 0.4, 1.0),
-            );
-        }
-
         set_default_camera();
         self.draw_hud();
 
@@ -371,8 +362,13 @@ impl Game {
         }
 
         if self.paused {
-            if let MenuAction::Resume = self.menu.run(&mut self.settings) {
-                self.resume();
+            match self.menu.run(&mut self.settings) {
+                MenuAction::Resume => self.resume(),
+                MenuAction::TestSound => {
+                    self.play(&self.sfx.shoot, 0.9);
+                    self.play(&self.sfx.kill, 0.9);
+                }
+                MenuAction::None => {}
             }
         }
     }
@@ -409,6 +405,27 @@ impl Game {
             draw_line(cx, cy - gap - len, cx, cy - gap, 2.0, c);
             draw_line(cx, cy + gap, cx, cy + gap + len, 2.0, c);
             draw_circle(cx, cy, 1.5, c);
+        }
+
+        // ---------- muzzle flash (screen centre = exactly on the crosshair)
+        if self.muzzle > 0.0 && !self.player.scoped {
+            let k = (self.muzzle / 0.06).clamp(0.0, 1.0);
+            let outer = Color::new(1.0, 0.75, 0.2, 0.9 * k);
+            let core = Color::new(1.0, 0.95, 0.7, k);
+            for i in 0..8 {
+                let a = i as f32 * std::f32::consts::TAU / 8.0 + 0.2;
+                let (r0, r1) = if i % 2 == 0 { (6.0, 24.0) } else { (6.0, 15.0) };
+                draw_line(
+                    cx + a.cos() * r0,
+                    cy + a.sin() * r0,
+                    cx + a.cos() * r1,
+                    cy + a.sin() * r1,
+                    3.0,
+                    outer,
+                );
+            }
+            draw_circle(cx, cy, 7.0, outer);
+            draw_circle(cx, cy, 4.0, core);
         }
 
         // ---------- hitmarker

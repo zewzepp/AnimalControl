@@ -5,7 +5,6 @@ use crate::settings::{
     Settings, BTN_COUNT, BTN_FIRE, BTN_JUMP, BTN_LABELS, BTN_RELOAD, BTN_SCOPE, BTN_SLIDE,
 };
 
-const JOY_RADIUS: f32 = 70.0;
 const JOY_DEADZONE: f32 = 0.15;
 
 /// Multiplier applied to touch aim delta before it reaches `Player::look`.
@@ -59,7 +58,10 @@ impl TouchControls {
     pub fn update(&mut self, st: &Settings) -> TouchFrame {
         let w = screen_width();
         let h = screen_height();
-        let left_half = w * 0.45;
+        // The stick only starts inside its own box (bottom-left by default), so
+        // it can never swallow buttons or the aiming area.
+        let joy_zone = st.joy_zone(w, h);
+        let joy_radius = st.joy_radius();
 
         let fire_rect = st.button_rect(BTN_FIRE, w, h);
         let scope_rect = st.button_rect(BTN_SCOPE, w, h);
@@ -83,12 +85,14 @@ impl TouchControls {
 
             match touch.phase {
                 TouchPhase::Started => {
+                    let on_button = fire_rect.contains(pos)
+                        || scope_rect.contains(pos)
+                        || jump_rect.contains(pos)
+                        || slide_rect.contains(pos)
+                        || reload_rect.contains(pos);
+
                     if menu_rect.contains(pos) {
                         menu_pressed = true;
-                    } else if pos.x < left_half && self.move_touch_id.is_none() {
-                        self.move_touch_id = Some(id);
-                        self.move_origin = pos;
-                        self.move_current = pos;
                     } else if fire_rect.contains(pos) && self.fire_touch_id.is_none() {
                         self.fire_touch_id = Some(id);
                         fire_just_pressed = true;
@@ -103,7 +107,14 @@ impl TouchControls {
                     } else if reload_rect.contains(pos) && self.reload_touch_id.is_none() {
                         self.reload_touch_id = Some(id);
                         reload_pressed = true;
-                    } else if pos.x > left_half && self.aim_touch_id.is_none() {
+                    } else if on_button {
+                        // a second finger on an already-held button: ignore it
+                    } else if joy_zone.contains(pos) && self.move_touch_id.is_none() {
+                        self.move_touch_id = Some(id);
+                        self.move_origin = pos;
+                        self.move_current = pos;
+                    } else if self.aim_touch_id.is_none() {
+                        // anywhere else on screen = look around
                         self.aim_touch_id = Some(id);
                         self.aim_last = pos;
                     }
@@ -151,9 +162,9 @@ impl TouchControls {
         if self.move_touch_id.is_some() {
             let offset = self.move_current - self.move_origin;
             let len = offset.length();
-            if len > JOY_DEADZONE * JOY_RADIUS {
-                let clamped = offset.clamp_length_max(JOY_RADIUS);
-                movement = clamped / JOY_RADIUS;
+            if len > JOY_DEADZONE * joy_radius {
+                let clamped = offset.clamp_length_max(joy_radius);
+                movement = clamped / joy_radius;
             }
         }
 
@@ -187,28 +198,25 @@ impl TouchControls {
         let h = screen_height();
         let op = st.hud_opacity;
 
+        let jr = st.joy_radius();
         if self.move_touch_id.is_some() {
             draw_circle_lines(
                 self.move_origin.x,
                 self.move_origin.y,
-                JOY_RADIUS,
+                jr,
                 3.0,
                 Color::new(1.0, 1.0, 1.0, 0.35 * op),
             );
             draw_circle(
                 self.move_current.x,
                 self.move_current.y,
-                26.0,
+                26.0 * st.joy_scale,
                 Color::new(1.0, 1.0, 1.0, 0.45 * op),
             );
         } else {
-            draw_circle_lines(
-                w * 0.12,
-                h - 150.0,
-                JOY_RADIUS,
-                2.0,
-                Color::new(1.0, 1.0, 1.0, 0.15 * op),
-            );
+            let c = st.joy_center(w, h);
+            draw_circle_lines(c.x, c.y, jr, 2.0, Color::new(1.0, 1.0, 1.0, 0.2 * op));
+            draw_circle(c.x, c.y, 26.0 * st.joy_scale, Color::new(1.0, 1.0, 1.0, 0.12 * op));
         }
 
         let active = [
