@@ -18,6 +18,7 @@ pub struct TouchFrame {
     pub movement: Vec2,          // -1..1 on each axis (x = strafe, +y = down on screen)
     pub jump_pressed: bool,      // edge
     pub slide_held: bool,        // slide/crouch button currently down
+    pub slide_pressed: bool,     // edge (SLIDE button went down)
     pub reload_pressed: bool,    // edge
     pub fire_held: bool,
     pub fire_just_pressed: bool, // edge
@@ -46,6 +47,7 @@ struct Pressed {
     fire: bool,
     fire_tap: bool,  // fire tapped and released inside one frame
     slide_tap: bool, // slide tapped and released inside one frame
+    slide: bool,     // slide button went down this frame
 }
 
 pub struct TouchControls {
@@ -137,7 +139,10 @@ impl TouchControls {
                     BTN_SCOPE => pr.scope = true,
                     BTN_JUMP => pr.jump = true,
                     BTN_RELOAD => pr.reload = true,
-                    BTN_SLIDE => pr.slide_tap |= tap,
+                    BTN_SLIDE => {
+                        pr.slide = true;
+                        pr.slide_tap |= tap;
+                    }
                     _ => {}
                 }
                 if !tap {
@@ -242,6 +247,7 @@ impl TouchControls {
             movement,
             jump_pressed: pr.jump,
             slide_held: self.btn_touch[BTN_SLIDE].is_some() || pr.slide_tap,
+            slide_pressed: pr.slide,
             reload_pressed: pr.reload,
             fire_held: self.btn_touch[BTN_FIRE].is_some() || pr.fire_tap,
             fire_just_pressed: pr.fire,
@@ -284,9 +290,11 @@ impl TouchControls {
                 3.0,
                 Color::new(1.0, 1.0, 1.0, 0.35 * op),
             );
+            // keep the thumb dot inside the ring
+            let knob = self.move_origin + (self.move_current - self.move_origin).clamp_length_max(jr);
             draw_circle(
-                self.move_current.x,
-                self.move_current.y,
+                knob.x,
+                knob.y,
                 26.0 * st.joy_scale,
                 Color::new(1.0, 1.0, 1.0, 0.45 * op),
             );

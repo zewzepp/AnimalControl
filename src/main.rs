@@ -10,7 +10,7 @@ mod weapon;
 use macroquad::audio::{play_sound, PlaySoundParams, Sound};
 use macroquad::prelude::*;
 
-use map::{ray_aabb, spread_dir, Map};
+use map::{los_clear, ray_aabb, spread_dir, Map};
 use mobile::{menu_button_rect, TouchControls, MOBILE_AIM_SCALE};
 use player::Player;
 use settings::{Menu, MenuAction, Settings};
@@ -21,6 +21,50 @@ struct Tracer {
     a: Vec3,
     b: Vec3,
     life: f32,
+    max: f32,
+    col: Color,
+}
+
+/// Small impact spark / debris particle.
+struct Spark {
+    pos: Vec3,
+    vel: Vec3,
+    life: f32,
+    max: f32,
+    col: Color,
+}
+
+/// Screen-space frame of the first-person gun: origin, barrel axis, "down" axis, scale.
+struct GunXf {
+    p: Vec2,
+    ax: Vec2,
+    ay: Vec2,
+    k: f32,
+    alpha: f32,
+}
+
+impl GunXf {
+    fn pt(&self, lx: f32, ly: f32) -> Vec2 {
+        self.p + self.ax * (lx * self.k) + self.ay * (ly * self.k)
+    }
+}
+
+fn tri_quad(a: Vec2, b: Vec2, c: Vec2, d: Vec2, col: Color) {
+    draw_triangle(a, b, c, col);
+    draw_triangle(a, c, d, col);
+}
+
+fn gun_rect(xf: &GunXf, x0: f32, y0: f32, x1: f32, y1: f32, col: Color) {
+    let c = Color::new(col.r, col.g, col.b, col.a * xf.alpha);
+    tri_quad(xf.pt(x0, y0), xf.pt(x1, y0), xf.pt(x1, y1), xf.pt(x0, y1), c);
+}
+
+fn arm_quad(from: Vec2, dir: Vec2, len: f32, half: f32, col: Color, alpha: f32) {
+    let d = dir.normalize_or_zero();
+    let perp = vec2(-d.y, d.x) * half;
+    let end = from + d * len;
+    let c = Color::new(col.r, col.g, col.b, col.a * alpha);
+    tri_quad(from + perp, from - perp, end - perp * 1.25, end + perp * 1.25, c);
 }
 
 struct Game {
@@ -29,6 +73,7 @@ struct Game {
     weapon: Weapon,
     bots: Vec<bots::Bot>,
     tracers: Vec<Tracer>,
+    sparks: Vec<Spark>,
     sfx: Sfx,
     hitmarker: f32,
     damage_flash: f32,
@@ -48,7 +93,7 @@ struct Game {
 }
 
 /// Scope zoom length in seconds.
-const ZOOM_TIME: f32 = 0.4;
+const ZOOM_TIME: f32 = 0.35;
 const FOV_NORMAL: f32 = 78.0;
 const FOV_SCOPED: f32 = 26.0;
 /// The vignette quad is drawn this many screen-heights wide.
@@ -126,6 +171,7 @@ impl Game {
             weapon: Weapon::new(),
             bots,
             tracers: Vec::new(),
+            sparks: Vec::new(),
             sfx,
             hitmarker: 0.0,
             damage_flash: 0.0,
@@ -194,6 +240,12 @@ impl Game {
             t.life -= dt;
         }
         self.tracers.retain(|t| t.life > 0.0);
+        for s in self.sparks.iter_mut() {
+            s.life -= dt;
+            s.vel.y -= 9.0 * dt;
+            s.pos += s.vel * dt;
+        }
+        self.sparks.retain(|s| s.life > 0.0);
 
         // --- touch input (must run before player.update)
         let tf = self.touch.update(&self.settings);
@@ -205,6 +257,11 @@ impl Game {
         self.player.mobile_jump = tf.jump_pressed;
         self.player.mobile_slide_active = tf.slide_held;
         self.player.mobile_fire = tf.fire_held;
+        // SLIDE button: while walking a tap toggles sneak; while running it slides
+        let running = tf.movement.length_squared() > 0.5;
+        if tf.slide_pressed && !running && self.player.alive {
+            self.player.sneak = !self.player.sneak;
+        }
         // scope is a toggle: tap SCOPE to zoom in, tap again to zoom out
         if tf.scope_pressed {
             self.player.mobile_scope = !self.player.mobile_scope;
@@ -223,14 +280,16 @@ impl Game {
         };
         // exponential smoothing of the look delta (frame-rate independent);
         // the tail keeps decaying after the finger lifts, which feels fluid
-        let a = 1.0 - (-24.0 * dt).exp();
+        let a = 1.0 - (-48.0 * dt).exp();
         self.look_sx += (dx - self.look_sx) * a;
         self.look_sy += (dy - self.look_sy) * a;
         let (dx, dy) = (self.look_sx, self.look_sy);
         let ez = ease(self.zoom);
         let sens = self.settings.sens_camera
             + (self.settings.sens_scope - self.settings.sens_camera) * ez;
-        self.player.look(dx * sens, dy * sens);
+        let engaged = tf.fire_held || self.player.mobile_scope || is_mouse_button_down(MouseButton::Left);
+        let assist = self.aim_assist(dt, engaged);
+        self.player.look(dx * sens * assist, dy * sens * assist);
 
         // --- scope
         self.player.scoped = (is_mouse_button_down(MouseButton::Right)
@@ -306,7 +365,13 @@ impl Game {
         }
 
         for s in shots {
-            self.tracers.push(Tracer { a: s.from, b: s.to, life: 0.07 });
+            self.tracers.push(Tracer {
+                a: s.from,
+                b: s.to,
+                life: 0.12,
+                max: 0.12,
+                col: Color::new(1.0, 0.35, 0.2, 1.0),
+            });
             self.play(&self.sfx.shoot_enemy, 0.25);
             if s.hit_player && self.player.alive {
                 self.player.health -= s.damage;
@@ -324,8 +389,12 @@ impl Game {
         self.weapon.fire();
         self.muzzle = 0.06;
 
-        self.player.recoil_pitch += 0.013 + macroquad::rand::gen_range(0.0f32, 0.008);
-        self.player.recoil_yaw += macroquad::rand::gen_range(-0.01f32, 0.01);
+        // medium kick, capped so sustained fire can't run away
+        self.player.recoil_pitch =
+            (self.player.recoil_pitch + 0.009 + macroquad::rand::gen_range(0.0f32, 0.005)).min(0.14);
+        self.player.recoil_yaw = (self.player.recoil_yaw
+            + macroquad::rand::gen_range(-0.006f32, 0.006))
+        .clamp(-0.05, 0.05);
 
         self.play(&self.sfx.shoot, 0.5);
 
@@ -362,7 +431,40 @@ impl Game {
         } else {
             eye + d * 120.0
         };
-        self.tracers.push(Tracer { a: eye + d * 0.5, b: end, life: 0.08 });
+        // tracer leaves from the gun muzzle (lower right of the view)
+        let up = vec3(0.0, 1.0, 0.0);
+        let right = dir.cross(up).normalize_or_zero();
+        let upv = right.cross(dir);
+        let muzzle = eye + dir * 0.9 + right * 0.22 - upv * 0.16;
+        self.tracers.push(Tracer {
+            a: muzzle,
+            b: end,
+            life: 0.16,
+            max: 0.16,
+            col: Color::new(1.0, 0.8, 0.35, 1.0),
+        });
+        if best_t.is_finite() {
+            let (col, n) = if best_bot.is_some() {
+                (Color::new(1.0, 0.25, 0.15, 1.0), 9)
+            } else {
+                (Color::new(1.0, 0.9, 0.55, 1.0), 6)
+            };
+            for _ in 0..n {
+                let r = vec3(
+                    macroquad::rand::gen_range(-1.0f32, 1.0),
+                    macroquad::rand::gen_range(-0.2f32, 1.0),
+                    macroquad::rand::gen_range(-1.0f32, 1.0),
+                );
+                let life = macroquad::rand::gen_range(0.18f32, 0.4);
+                self.sparks.push(Spark {
+                    pos: end - d * 0.05,
+                    vel: -d * macroquad::rand::gen_range(1.0f32, 3.0) + r * 2.5,
+                    life,
+                    max: life,
+                    col,
+                });
+            }
+        }
 
         if let Some(i) = best_bot {
             self.hitmarker = 0.15;
@@ -384,6 +486,147 @@ impl Game {
                 self.play(&self.sfx.kill, 0.5);
             }
         }
+    }
+
+    /// Minimal aim assist: slows the camera slightly while the crosshair is on
+    /// an enemy, and while firing/scoped nudges it gently toward their centre.
+    /// Returns the sensitivity multiplier for this frame.
+    fn aim_assist(&mut self, dt: f32, engaged: bool) -> f32 {
+        if !self.player.alive {
+            return 1.0;
+        }
+        let eye = self.player.eye_pos();
+        let fwd = self.player.aim_dir();
+        let mut best: Option<(f32, Vec3)> = None;
+        for bot in &self.bots {
+            if !bot.alive {
+                continue;
+            }
+            let c = bot.pos + vec3(0.0, 1.1, 0.0);
+            let to = c - eye;
+            let dist = to.length();
+            if dist < 1.0 || dist > 60.0 {
+                continue;
+            }
+            let dir = to / dist;
+            let ang = fwd.dot(dir).clamp(-1.0, 1.0).acos();
+            let cone = (0.8 / dist).atan().clamp(0.02, 0.07);
+            if ang < cone && los_clear(eye, c, &self.map) {
+                if best.map_or(true, |(a, _)| ang < a) {
+                    best = Some((ang, dir));
+                }
+            }
+        }
+        if let Some((_, dir)) = best {
+            if engaged {
+                let ty = (-dir.x).atan2(-dir.z);
+                let tp = dir.y.clamp(-1.0, 1.0).asin();
+                let mut dyaw = ty - (self.player.yaw + self.player.recoil_yaw);
+                while dyaw > std::f32::consts::PI {
+                    dyaw -= std::f32::consts::TAU;
+                }
+                while dyaw < -std::f32::consts::PI {
+                    dyaw += std::f32::consts::TAU;
+                }
+                let dp = tp - (self.player.pitch + self.player.recoil_pitch);
+                let pull = 1.0 - (-2.5 * dt).exp();
+                self.player.yaw += dyaw * pull;
+                self.player.pitch = (self.player.pitch + dp * pull).clamp(-1.5, 1.5);
+            }
+            return 0.8;
+        }
+        1.0
+    }
+
+    /// Where the first-person gun sits on screen, with bob / kick / reload / slide animation.
+    fn gun_xf(&self) -> GunXf {
+        let w = screen_width();
+        let h = screen_height();
+        let k = h / 720.0 * 0.9;
+        let p = &self.player;
+        let ez = ease(self.zoom);
+        let alpha = (1.0 - ez * 2.0).clamp(0.0, 1.0);
+
+        let moving = if p.on_ground && !p.sliding {
+            (p.speed_now / 8.4).min(1.0)
+        } else {
+            0.0
+        };
+        let mut off = vec2(
+            p.bob.sin() * 8.0 * moving * k,
+            (p.bob * 2.0).sin().abs() * 9.0 * moving * k,
+        );
+        let kick = (self.weapon.cooldown / self.weapon.fire_interval).clamp(0.0, 1.0);
+        let sprintf = ((p.speed_now - 6.5) / 2.0).clamp(0.0, 1.0) * if p.on_ground { 1.0 } else { 0.0 };
+
+        let base = vec2(w * 0.68 + off.x, h * 0.97 + off.y);
+        let c = vec2(w * 0.5, h * 0.5);
+        let mut ang = (c.y - base.y).atan2(c.x - base.x);
+
+        // kick: slide back and muzzle climbs
+        ang += 0.07 * kick;
+        let mut pos = base;
+        // reload dip
+        if self.weapon.reloading > 0.0 {
+            let dip = (self.weapon.reload_progress() * std::f32::consts::PI).sin();
+            pos.y += 190.0 * k * dip;
+            ang -= 0.35 * dip;
+        }
+        // sprint / slide lowering
+        pos.y += 22.0 * k * sprintf;
+        ang -= 0.10 * sprintf;
+        if p.sliding {
+            pos.y += 30.0 * k;
+            ang -= 0.14;
+        }
+        off = vec2(ang.cos(), ang.sin());
+        pos -= off * (22.0 * k * kick);
+
+        GunXf {
+            p: pos,
+            ax: off,
+            ay: vec2(ang.sin(), -ang.cos()),
+            k,
+            alpha,
+        }
+    }
+
+    /// Blocky first-person arms and rifle in the lower right.
+    fn draw_viewmodel(&self) {
+        if !self.player.alive || self.paused {
+            return;
+        }
+        let xf = self.gun_xf();
+        if xf.alpha <= 0.01 {
+            return;
+        }
+        let k = xf.k;
+        let sleeve = Color::new(0.22, 0.32, 0.28, 1.0);
+        let skin = Color::new(0.93, 0.74, 0.58, 1.0);
+        let body = Color::new(0.17, 0.18, 0.20, 1.0);
+        let dark = Color::new(0.09, 0.09, 0.11, 1.0);
+        let accent = Color::new(0.32, 0.34, 0.38, 1.0);
+
+        // arms first (behind the gun)
+        let a1 = xf.pt(-25.0, 40.0);
+        arm_quad(a1, vec2(0.35, 1.0), 520.0 * k, 36.0 * k, sleeve, xf.alpha);
+        let a2 = xf.pt(115.0, 26.0);
+        arm_quad(a2, vec2(-0.55, 1.0), 520.0 * k, 32.0 * k, sleeve, xf.alpha);
+
+        // gun
+        gun_rect(&xf, -150.0, -8.0, -60.0, 18.0, dark); // stock
+        gun_rect(&xf, -60.0, -16.0, 150.0, 16.0, body); // receiver
+        gun_rect(&xf, -20.0, -22.0, 120.0, -16.0, accent); // top rail
+        gun_rect(&xf, 150.0, -7.0, 270.0, 7.0, dark); // barrel
+        gun_rect(&xf, 232.0, -16.0, 244.0, -7.0, accent); // front sight
+        gun_rect(&xf, 20.0, 16.0, 52.0, 72.0, dark); // magazine
+        gun_rect(&xf, -40.0, 16.0, -10.0, 62.0, body); // grip
+        gun_rect(&xf, 80.0, 16.0, 150.0, 24.0, accent); // handguard underside
+
+        // hands on top
+        gun_rect(&xf, -48.0, 18.0, 6.0, 70.0, skin); // trigger hand
+        gun_rect(&xf, -8.0, 16.0, 20.0, 36.0, skin); // fingers
+        gun_rect(&xf, 84.0, 6.0, 152.0, 38.0, skin); // support hand
     }
 
     fn draw(&mut self) {
@@ -414,11 +657,37 @@ impl Game {
 
         self.map.draw_lines(cam_pos, cam_fwd);
 
+        // bullet trails: a bright streak that travels to the target and fades,
+        // with a soft glow built from a few offset lines
         for t in &self.tracers {
-            draw_line_3d(t.a, t.b, Color::new(1.0, 0.9, 0.5, 0.9));
+            let age = (t.max - t.life).max(0.0);
+            let head = (age / (0.45 * t.max)).min(1.0);
+            let tail = ((age - 0.15 * t.max) / (0.5 * t.max)).clamp(0.0, 1.0);
+            let p0 = t.a.lerp(t.b, tail);
+            let p1 = t.a.lerp(t.b, head);
+            if (p1 - p0).length() < 0.01 {
+                continue;
+            }
+            let fade = (t.life / t.max).clamp(0.0, 1.0);
+            let dir = (t.b - t.a).normalize_or_zero();
+            let right = dir.cross(vec3(0.0, 1.0, 0.0)).normalize_or_zero();
+            let upv = right.cross(dir);
+            for (r, al) in [(0.04f32, 0.10f32), (0.02, 0.22)] {
+                let c = Color::new(t.col.r, t.col.g, t.col.b, al * fade);
+                for off in [right * r, -right * r, upv * r, -upv * r] {
+                    draw_line_3d(p0 + off, p1 + off, c);
+                }
+            }
+            draw_line_3d(p0, p1, Color::new(1.0, 1.0, 0.92, fade));
+        }
+        for s in &self.sparks {
+            let a = (s.life / s.max).clamp(0.0, 1.0);
+            let sz = 0.03 + 0.04 * a;
+            draw_cube(s.pos, vec3(sz, sz, sz), None, Color::new(s.col.r, s.col.g, s.col.b, a));
         }
 
         set_default_camera();
+        self.draw_viewmodel();
         self.draw_hud();
 
         // --- on-screen touch controls (drawn last so they overlay everything)
@@ -483,7 +752,10 @@ impl Game {
         }
 
         // ---------- muzzle flash (screen centre = exactly on the crosshair)
-        if self.muzzle > 0.0 && ez < 0.5 {
+        if self.muzzle > 0.0 && ez < 0.5 && self.player.alive {
+            let xf = self.gun_xf();
+            let m = xf.pt(285.0, 0.0);
+            let (cx, cy) = (m.x, m.y);
             let k = (self.muzzle / 0.06).clamp(0.0, 1.0);
             let outer = Color::new(1.0, 0.75, 0.2, 0.9 * k);
             let core = Color::new(1.0, 0.95, 0.7, k);

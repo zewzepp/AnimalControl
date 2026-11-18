@@ -26,6 +26,7 @@ pub struct Player {
     pub bob_y: f32,
     pub bob_amp: f32,
     pub slide_boost: f32,
+    pub sneak: bool, // toggled sneak (mobile SLIDE tap while walking)
     pub land: f32,
     pub recoil_pitch: f32,
     pub recoil_yaw: f32,
@@ -60,6 +61,7 @@ impl Player {
             bob_y: 0.0,
             bob_amp: 0.0,
             slide_boost: 0.0,
+            sneak: false,
             land: 0.0,
             recoil_pitch: 0.0,
             recoil_yaw: 0.0,
@@ -129,6 +131,7 @@ impl Player {
         self.respawn_t = 2.5;
         self.sliding = false;
         self.crouching = false;
+        self.sneak = false;
         self.scoped = false;
     }
 
@@ -140,6 +143,7 @@ impl Player {
         self.alive = true;
         self.sliding = false;
         self.crouching = false;
+        self.sneak = false;
         self.pitch = 0.0;
         self.eye = STAND_H - 0.12;
         self.recoil_pitch = 0.0;
@@ -148,10 +152,10 @@ impl Player {
 
     pub fn update(&mut self, dt: f32, map: &Map) {
         // recoil recovery
-        let k = (-8.0 * dt).exp();
+        let k = (-9.0 * dt).exp();
         self.recoil_pitch *= k;
         self.recoil_yaw *= k;
-        self.land *= (-7.0 * dt).exp();
+        self.land *= (-10.0 * dt).exp();
         if self.land < 0.001 {
             self.land = 0.0;
         }
@@ -193,20 +197,22 @@ impl Player {
         // On mobile, pushing the stick hard in any direction counts as sprint.
         let sprint =
             is_key_down(KeyCode::LeftShift) || self.mobile_move.length_squared() > 0.5;
-        let crouch_held = is_key_down(KeyCode::LeftControl)
+        let slide_btn = is_key_down(KeyCode::LeftControl)
             || is_key_down(KeyCode::C)
             || self.mobile_slide_active;
+        let crouch_held = slide_btn || self.sneak;
 
         // ---------------- slide start
         if sprint
-            && crouch_held
+            && slide_btn
             && !self.sliding
-            && !self.crouching
+            && (!self.crouching || self.sneak)
             && self.on_ground
         {
             let hs = vec2(self.vel.x, self.vel.z).length();
             if hs > 7.0 {
                 self.sliding = true;
+                self.sneak = false;
                 self.slide_t = 0.85;
                 // speed ramps up to the boost over the first ~0.15s instead of snapping
                 self.slide_boost = (hs * 1.25).clamp(9.5, 14.0);
@@ -219,8 +225,8 @@ impl Player {
         if self.sliding {
             self.slide_t -= dt;
             let mut hs = vec2(self.vel.x, self.vel.z).length();
-            if self.slide_t > 0.70 {
-                hs += (self.slide_boost - hs) * (1.0 - (-16.0 * dt).exp());
+            if self.slide_t > 0.78 {
+                hs += (self.slide_boost - hs) * (1.0 - (-24.0 * dt).exp());
             } else {
                 hs -= 3.5 * dt;
             }
@@ -253,9 +259,9 @@ impl Player {
             // down gradually (stopping is a touch slower than starting)
             let speeding_up = target.length_squared() > 1e-4;
             let rate = if self.on_ground {
-                if speeding_up { 9.0 } else { 7.0 }
+                if speeding_up { 15.0 } else { 12.0 }
             } else {
-                4.5
+                7.0
             };
             let f = 1.0 - (-rate * dt).exp();
             self.vel.x += dvx * f;
@@ -288,12 +294,12 @@ impl Player {
         self.on_ground = grounded;
 
         if grounded && !was_ground {
-            self.land = (impact * 0.008).clamp(0.02, 0.10);
+            self.land = (impact * 0.010).clamp(0.025, 0.13);
         }
 
         // ---------------- eye height smoothing
         let target_eye = self.height() - 0.12;
-        self.eye += (target_eye - self.eye) * (1.0 - (-9.0 * dt).exp());
+        self.eye += (target_eye - self.eye) * (1.0 - (-12.0 * dt).exp());
 
         // ---------------- head bob
         let hs = vec2(self.vel.x, self.vel.z).length();
@@ -311,7 +317,7 @@ impl Player {
             0.0
         };
         // fade the bob in/out instead of snapping when you start/stop
-        self.bob_amp += (bob_target - self.bob_amp) * (1.0 - (-8.0 * dt).exp());
+        self.bob_amp += (bob_target - self.bob_amp) * (1.0 - (-12.0 * dt).exp());
         self.bob_y = (self.bob * 2.0).sin() * self.bob_amp;
     }
 }
