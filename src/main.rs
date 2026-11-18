@@ -1,4 +1,5 @@
 // src/main.rs
+mod ar_model;
 mod bots;
 mod map;
 mod mobile;
@@ -106,18 +107,42 @@ fn draw_gun_hands(xf: &GunXf, sx: f32) {
     gun_rect(xf, sx - 8.0, -2.0, sx + 20.0, 14.0, SKIN); // thumb
 }
 
+/// The penguin rifle with Roblox-style blocky grey arms (traced from the reference render,
+/// see ar_model.rs). Everything is drawn as flat triangles in the gun's local frame, so
+/// bob / kick / reload dip / sprint lowering all still work.
 fn draw_ar(xf: &GunXf) {
-    gun_rect(xf, -150.0, -6.0, -62.0, 22.0, DARK); // stock
-    gun_rect(xf, -62.0, -16.0, 150.0, 18.0, BODY); // receiver
-    gun_rect(xf, -20.0, -23.0, 125.0, -16.0, ACCENT); // top rail
-    gun_rect(xf, -10.0, -30.0, 4.0, -23.0, DARK); // rear sight
-    gun_rect(xf, 110.0, -14.0, 215.0, 14.0, ACCENT); // handguard
-    gun_rect(xf, 215.0, -6.0, 285.0, 6.0, DARK); // barrel
-    gun_rect(xf, 275.0, -9.0, 288.0, 9.0, DARK); // muzzle brake
-    gun_rect(xf, 230.0, -24.0, 240.0, -6.0, DARK); // front sight post
-    gun_quad(xf, [(22.0, 18.0), (54.0, 18.0), (66.0, 78.0), (36.0, 82.0)], DARK); // magazine
-    gun_quad(xf, [(-44.0, 18.0), (-14.0, 18.0), (-26.0, 66.0), (-56.0, 64.0)], BODY); // grip
-    draw_gun_hands(xf, 120.0);
+    let inv = 1.0 / ar_model::MODEL_SCALE;
+    let mut pal = [Color::new(0.0, 0.0, 0.0, 0.0); ar_model::PALETTE.len()];
+    for (i, c) in ar_model::PALETTE.iter().enumerate() {
+        pal[i] = Color::new(
+            c[0] as f32 / 255.0,
+            c[1] as f32 / 255.0,
+            c[2] as f32 / 255.0,
+            xf.alpha,
+        );
+    }
+    for (ci, t) in ar_model::TRIS.iter() {
+        let a = xf.pt(t[0] as f32 * inv, t[1] as f32 * inv);
+        let b = xf.pt(t[2] as f32 * inv, t[3] as f32 * inv);
+        let c = xf.pt(t[4] as f32 * inv, t[5] as f32 * inv);
+        draw_triangle(a, b, c, pal[*ci as usize]);
+    }
+
+    // penguin badge on the receiver
+    let (lx, ly, lr) = ar_model::LOGO;
+    let r = lr * xf.k;
+    let a = xf.alpha;
+    let ctr = xf.pt(lx, ly);
+    draw_circle(ctr.x, ctr.y, r, Color::new(0.95, 0.95, 0.97, a));
+    draw_circle(ctr.x, ctr.y, r * 0.88, Color::new(0.08, 0.08, 0.10, a));
+    let face = xf.pt(lx + lr * 0.05, ly + lr * 0.22);
+    draw_circle(face.x, face.y, r * 0.58, Color::new(0.96, 0.96, 0.98, a));
+    let e1 = xf.pt(lx - lr * 0.18, ly + lr * 0.08);
+    let e2 = xf.pt(lx + lr * 0.26, ly + lr * 0.08);
+    draw_circle(e1.x, e1.y, r * 0.09, Color::new(0.05, 0.05, 0.06, a));
+    draw_circle(e2.x, e2.y, r * 0.09, Color::new(0.05, 0.05, 0.06, a));
+    let bk = xf.pt(lx + lr * 0.04, ly + lr * 0.30);
+    draw_circle(bk.x, bk.y, r * 0.12, Color::new(0.93, 0.55, 0.14, a));
 }
 
 fn draw_sniper(xf: &GunXf) {
@@ -614,7 +639,12 @@ impl Game {
         let up = vec3(0.0, 1.0, 0.0);
         let right = dir.cross(up).normalize_or_zero();
         let upv = right.cross(dir);
-        let muzzle = eye + dir * 0.9 + right * 0.22 - upv * 0.16;
+        let muzzle = if sniper {
+            eye + dir * 0.9 + right * 0.22 - upv * 0.16
+        } else {
+            // penguin rifle: the beak sits up-left of the crosshair (see ar_model.rs pose)
+            eye + dir * 0.9 - right * 0.25 + upv * 0.15
+        };
         let (tl, tcol) = if sniper {
             (0.3, Color::new(0.6, 0.85, 1.0, 1.0))
         } else {
@@ -818,10 +848,17 @@ impl Game {
         } else if sniper {
             (vec2(w * 0.72 + bob.x, h * 0.88 + bob.y), 370.0)
         } else {
-            (vec2(w * 0.68 + bob.x, h * 0.82 + bob.y), 285.0)
+            // penguin rifle: sits exactly where the reference render has it
+            (
+                vec2(w * ar_model::POSE_X + bob.x, h * ar_model::POSE_Y + bob.y),
+                ar_model::MUZZLE_X,
+            )
         };
         let target = if melee { vec2(w * 0.52, h * 0.30) } else { c };
         let mut ang = (target.y - base.y).atan2(target.x - base.x);
+        if !melee && !sniper {
+            ang = ar_model::POSE_ANGLE; // fixed reference hold, not aimed at the crosshair
+        }
         let mut pos = base;
 
         // kick (gun muzzle climbs and slides back)
