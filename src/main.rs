@@ -3,15 +3,17 @@ mod bots;
 mod map;
 mod mobile;
 mod player;
+mod settings;
 mod sfx;
 mod weapon;
 
-use macroquad::audio::{play_sound, PlaySoundParams};
+use macroquad::audio::{play_sound, PlaySoundParams, Sound};
 use macroquad::prelude::*;
 
 use map::{ray_aabb, spread_dir, Map};
-use mobile::{TouchControls, MOBILE_AIM_SCALE};
+use mobile::{menu_button_rect, TouchControls, MOBILE_AIM_SCALE};
 use player::Player;
+use settings::{Menu, MenuAction, Settings};
 use sfx::Sfx;
 use weapon::Weapon;
 
@@ -35,6 +37,8 @@ struct Game {
     deaths: u32,
     paused: bool,
     touch: TouchControls,
+    settings: Settings,
+    menu: Menu,
 }
 
 fn window_conf() -> Conf {
@@ -91,14 +95,49 @@ impl Game {
             deaths: 0,
             paused: false,
             touch: TouchControls::new(),
+            settings: Settings::new(),
+            menu: Menu::new(),
         }
+    }
+
+    /// Play a sound at `vol`, scaled by the master volume setting.
+    fn play(&self, snd: &Sound, vol: f32) {
+        play_sound(
+            snd,
+            PlaySoundParams { looped: false, volume: vol * self.settings.volume },
+        );
+    }
+
+    fn open_menu(&mut self) {
+        self.paused = true;
+        self.menu.editing = false;
+        self.touch.reset();
+        let _ = set_cursor_grab(false);
+        let _ = show_mouse(true);
+    }
+
+    fn resume(&mut self) {
+        self.paused = false;
+        self.menu.editing = false;
+        self.touch.reset();
+        let _ = set_cursor_grab(true);
+        let _ = show_mouse(false);
     }
 
     fn update(&mut self, dt: f32) {
         if is_key_pressed(KeyCode::Escape) {
-            self.paused = !self.paused;
-            let _ = set_cursor_grab(!self.paused);
-            let _ = show_mouse(self.paused);
+            if self.paused {
+                self.resume();
+            } else {
+                self.open_menu();
+            }
+        }
+        // desktop / browser: click the MENU button
+        if !self.paused && is_mouse_button_pressed(MouseButton::Left) {
+            let (mx, my) = mouse_position();
+            if menu_button_rect(screen_width(), screen_height()).contains(vec2(mx, my)) {
+                self.open_menu();
+            }
         }
         if self.paused {
             return;
@@ -114,7 +153,11 @@ impl Game {
         self.tracers.retain(|t| t.life > 0.0);
 
         // --- touch input (must run before player.update)
-        let tf = self.touch.update();
+        let tf = self.touch.update(&self.settings);
+        if tf.menu_pressed {
+            self.open_menu();
+            return;
+        }
         self.player.mobile_move = tf.movement;
         self.player.mobile_jump = tf.jump_pressed;
         self.player.mobile_slide_active = tf.slide_held;
@@ -135,7 +178,7 @@ impl Game {
             let md = mouse_delta_position();
             (md.x.clamp(-0.5, 0.5), md.y.clamp(-0.5, 0.5))
         };
-        self.player.look(dx, dy);
+        self.player.look(dx * self.settings.sensitivity, dy * self.settings.sensitivity);
 
         // --- scope
         self.player.scoped = (is_mouse_button_down(MouseButton::Right)
@@ -144,7 +187,17 @@ impl Game {
             && !self.player.sliding;
 
         // --- player movement
+        let was_on_ground = self.player.on_ground;
+        let was_sliding = self.player.sliding;
         self.player.update(dt, &self.map);
+        if self.player.alive {
+            if was_on_ground && self.player.vel.y > 2.0 {
+                self.play(&self.sfx.jump, 0.3);
+            }
+            if !was_sliding && self.player.sliding {
+                self.play(&self.sfx.slide, 0.35);
+            }
+        }
 
         // --- weapon
         self.weapon.update(dt);
@@ -155,10 +208,7 @@ impl Game {
                 let was = self.weapon.reloading;
                 self.weapon.start_reload();
                 if was <= 0.0 && self.weapon.reloading > 0.0 {
-                    play_sound(
-                        &self.sfx.reload,
-                        PlaySoundParams { looped: false, volume: 0.5 },
-                    );
+                    self.play(&self.sfx.reload, 0.5);
                 }
             }
 
@@ -167,10 +217,7 @@ impl Game {
                 && self.weapon.mag <= 0
                 && self.weapon.reloading <= 0.0
             {
-                play_sound(
-                    &self.sfx.empty,
-                    PlaySoundParams { looped: false, volume: 0.4 },
-                );
+                self.play(&self.sfx.empty, 0.4);
                 self.weapon.start_reload();
             }
 
@@ -196,10 +243,7 @@ impl Game {
 
         for s in shots {
             self.tracers.push(Tracer { a: s.from, b: s.to, life: 0.07 });
-            play_sound(
-                &self.sfx.shoot_enemy,
-                PlaySoundParams { looped: false, volume: 0.25 },
-            );
+            self.play(&self.sfx.shoot_enemy, 0.25);
             if s.hit_player && self.player.alive {
                 self.player.health -= s.damage;
                 self.damage_flash = 0.35;
@@ -219,10 +263,7 @@ impl Game {
         self.player.recoil_pitch += 0.013 + macroquad::rand::gen_range(0.0f32, 0.008);
         self.player.recoil_yaw += macroquad::rand::gen_range(-0.01f32, 0.01);
 
-        play_sound(
-            &self.sfx.shoot,
-            PlaySoundParams { looped: false, volume: 0.5 },
-        );
+        self.play(&self.sfx.shoot, 0.5);
 
         let eye = self.player.eye_pos();
         let dir = self.player.aim_dir();
@@ -261,10 +302,7 @@ impl Game {
 
         if let Some(i) = best_bot {
             self.hitmarker = 0.15;
-            play_sound(
-                &self.sfx.hit,
-                PlaySoundParams { looped: false, volume: 0.35 },
-            );
+            self.play(&self.sfx.hit, 0.35);
 
             let mut killed = false;
             {
@@ -279,10 +317,7 @@ impl Game {
             }
             if killed {
                 self.score += 1;
-                play_sound(
-                    &self.sfx.kill,
-                    PlaySoundParams { looped: false, volume: 0.5 },
-                );
+                self.play(&self.sfx.kill, 0.5);
             }
         }
     }
@@ -313,12 +348,15 @@ impl Game {
             draw_line_3d(t.a, t.b, Color::new(1.0, 0.9, 0.5, 0.9));
         }
 
-        if self.muzzle > 0.0 {
+        if self.muzzle > 0.0 && !self.player.scoped {
+            // small flash at the gun, low and to the right so it never blocks the view
             let e = self.player.eye_pos();
             let d = self.player.aim_dir();
+            let right = d.cross(vec3(0.0, 1.0, 0.0)).normalize_or_zero();
+            let up = right.cross(d);
             draw_cube(
-                e + d * 0.9,
-                Vec3::splat(0.22),
+                e + d * 1.2 + right * 0.34 - up * 0.28,
+                Vec3::splat(0.05),
                 None,
                 Color::new(1.0, 0.85, 0.4, 1.0),
             );
@@ -329,7 +367,13 @@ impl Game {
 
         // --- on-screen touch controls (drawn last so they overlay everything)
         if !self.paused {
-            self.touch.draw();
+            self.touch.draw(&self.settings);
+        }
+
+        if self.paused {
+            if let MenuAction::Resume = self.menu.run(&mut self.settings) {
+                self.resume();
+            }
         }
     }
 
@@ -469,15 +513,5 @@ impl Game {
             draw_text(t, cx - ts.width * 0.5, cy + 10.0, 64.0, WHITE);
         }
 
-        // ---------- paused
-        if self.paused {
-            draw_rectangle(0.0, 0.0, w, h, Color::new(0.0, 0.0, 0.0, 0.65));
-            let t = "PAUSED";
-            let ts = measure_text(t, None, 56, 1.0);
-            draw_text(t, cx - ts.width * 0.5, cy, 56.0, WHITE);
-            let t2 = "ESC to resume";
-            let ts2 = measure_text(t2, None, 24, 1.0);
-            draw_text(t2, cx - ts2.width * 0.5, cy + 46.0, 24.0, GRAY);
-        }
     }
 }

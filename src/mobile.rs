@@ -1,6 +1,10 @@
 // src/mobile.rs
 use macroquad::prelude::*;
 
+use crate::settings::{
+    Settings, BTN_COUNT, BTN_FIRE, BTN_JUMP, BTN_LABELS, BTN_RELOAD, BTN_SCOPE, BTN_SLIDE,
+};
+
 const JOY_RADIUS: f32 = 70.0;
 const JOY_DEADZONE: f32 = 0.15;
 
@@ -17,6 +21,7 @@ pub struct TouchFrame {
     pub fire_just_pressed: bool, // edge
     pub scope_held: bool,
     pub scope_pressed: bool,     // edge (used for toggle scope)
+    pub menu_pressed: bool,      // MENU button tapped
     pub aim_delta: Vec2,         // pixel delta on the aim side this frame
 }
 
@@ -51,16 +56,18 @@ impl TouchControls {
         }
     }
 
-    pub fn update(&mut self) -> TouchFrame {
+    pub fn update(&mut self, st: &Settings) -> TouchFrame {
         let w = screen_width();
         let h = screen_height();
         let left_half = w * 0.45;
 
-        let fire_rect = Self::fire_rect(w, h);
-        let scope_rect = Self::scope_rect(w, h);
-        let jump_rect = Self::jump_rect(w, h);
-        let slide_rect = Self::slide_rect(w, h);
-        let reload_rect = Self::reload_rect(w, h);
+        let fire_rect = st.button_rect(BTN_FIRE, w, h);
+        let scope_rect = st.button_rect(BTN_SCOPE, w, h);
+        let jump_rect = st.button_rect(BTN_JUMP, w, h);
+        let slide_rect = st.button_rect(BTN_SLIDE, w, h);
+        let reload_rect = st.button_rect(BTN_RELOAD, w, h);
+        let menu_rect = menu_button_rect(w, h);
+        let mut menu_pressed = false;
 
         let mut jump_pressed = false;
         let mut reload_pressed = false;
@@ -76,7 +83,9 @@ impl TouchControls {
 
             match touch.phase {
                 TouchPhase::Started => {
-                    if pos.x < left_half && self.move_touch_id.is_none() {
+                    if menu_rect.contains(pos) {
+                        menu_pressed = true;
+                    } else if pos.x < left_half && self.move_touch_id.is_none() {
                         self.move_touch_id = Some(id);
                         self.move_origin = pos;
                         self.move_current = pos;
@@ -157,29 +166,26 @@ impl TouchControls {
             fire_just_pressed,
             scope_held: self.scope_touch_id.is_some(),
             scope_pressed,
+            menu_pressed,
             aim_delta,
         }
     }
 
-    fn fire_rect(w: f32, h: f32) -> Rect {
-        Rect::new(w - 160.0, h - 200.0, 110.0, 110.0)
-    }
-    fn scope_rect(w: f32, h: f32) -> Rect {
-        Rect::new(w - 290.0, h - 150.0, 90.0, 90.0)
-    }
-    fn jump_rect(w: f32, h: f32) -> Rect {
-        Rect::new(w - 110.0, h - 340.0, 80.0, 80.0)
-    }
-    fn slide_rect(w: f32, h: f32) -> Rect {
-        Rect::new(w - 220.0, h - 320.0, 80.0, 80.0)
-    }
-    fn reload_rect(w: f32, h: f32) -> Rect {
-        Rect::new(w - 100.0, h - 450.0, 80.0, 80.0)
+    /// Forget every held control (used when the menu opens/closes).
+    pub fn reset(&mut self) {
+        self.move_touch_id = None;
+        self.aim_touch_id = None;
+        self.fire_touch_id = None;
+        self.scope_touch_id = None;
+        self.jump_touch_id = None;
+        self.slide_touch_id = None;
+        self.reload_touch_id = None;
     }
 
-    pub fn draw(&self) {
+    pub fn draw(&self, st: &Settings) {
         let w = screen_width();
         let h = screen_height();
+        let op = st.hud_opacity;
 
         if self.move_touch_id.is_some() {
             draw_circle_lines(
@@ -187,13 +193,13 @@ impl TouchControls {
                 self.move_origin.y,
                 JOY_RADIUS,
                 3.0,
-                Color::new(1.0, 1.0, 1.0, 0.35),
+                Color::new(1.0, 1.0, 1.0, 0.35 * op),
             );
             draw_circle(
                 self.move_current.x,
                 self.move_current.y,
                 26.0,
-                Color::new(1.0, 1.0, 1.0, 0.45),
+                Color::new(1.0, 1.0, 1.0, 0.45 * op),
             );
         } else {
             draw_circle_lines(
@@ -201,24 +207,55 @@ impl TouchControls {
                 h - 150.0,
                 JOY_RADIUS,
                 2.0,
-                Color::new(1.0, 1.0, 1.0, 0.15),
+                Color::new(1.0, 1.0, 1.0, 0.15 * op),
             );
         }
 
-        Self::draw_button(Self::fire_rect(w, h), "FIRE", self.fire_touch_id.is_some(), Color::new(0.9, 0.2, 0.2, 1.0));
-        Self::draw_button(Self::scope_rect(w, h), "SCOPE", self.scope_touch_id.is_some(), Color::new(0.2, 0.8, 1.0, 1.0));
-        Self::draw_button(Self::jump_rect(w, h), "JUMP", self.jump_touch_id.is_some(), Color::new(0.2, 0.9, 0.3, 1.0));
-        Self::draw_button(Self::slide_rect(w, h), "SLIDE", self.slide_touch_id.is_some(), Color::new(0.9, 0.8, 0.2, 1.0));
-        Self::draw_button(Self::reload_rect(w, h), "RELOAD", self.reload_touch_id.is_some(), Color::new(0.9, 0.6, 0.2, 1.0));
+        let active = [
+            self.fire_touch_id.is_some(),
+            self.scope_touch_id.is_some(),
+            self.jump_touch_id.is_some(),
+            self.slide_touch_id.is_some(),
+            self.reload_touch_id.is_some(),
+        ];
+        for i in 0..BTN_COUNT {
+            Self::draw_button(
+                st.button_rect(i, w, h),
+                BTN_LABELS[i],
+                active[i],
+                crate::settings::btn_color(i),
+                op,
+            );
+        }
+
+        Self::draw_button(
+            menu_button_rect(w, h),
+            "MENU",
+            false,
+            Color::new(0.5, 0.5, 0.6, 1.0),
+            op.max(0.5),
+        );
     }
 
-    fn draw_button(r: Rect, label: &str, active: bool, col: Color) {
-        let a = if active { 0.85 } else { 0.45 };
+    pub fn draw_button(r: Rect, label: &str, active: bool, col: Color, opacity: f32) {
+        let a = (if active { 0.85 } else { 0.45 }) * opacity;
         draw_rectangle(r.x, r.y, r.w, r.h, Color::new(col.r, col.g, col.b, a));
-        draw_rectangle_lines(r.x, r.y, r.w, r.h, 2.0, Color::new(1.0, 1.0, 1.0, 0.7));
-        let tw = measure_text(label, None, 18, 1.0).width;
-        draw_text(label, r.x + (r.w - tw) * 0.5, r.y + r.h * 0.6, 18.0, WHITE);
+        draw_rectangle_lines(r.x, r.y, r.w, r.h, 2.0, Color::new(1.0, 1.0, 1.0, 0.7 * opacity));
+        let fs = (r.w * 0.225).clamp(12.0, 30.0);
+        let tw = measure_text(label, None, fs as u16, 1.0).width;
+        draw_text(
+            label,
+            r.x + (r.w - tw) * 0.5,
+            r.y + r.h * 0.6,
+            fs,
+            Color::new(1.0, 1.0, 1.0, opacity.max(0.4)),
+        );
     }
+}
+
+/// Small MENU button under the FPS counter (top-right).
+pub fn menu_button_rect(w: f32, _h: f32) -> Rect {
+    Rect::new(w - 130.0, 60.0, 100.0, 44.0)
 }
 
 fn release_if_gone(slot: &mut Option<u64>, active: &[u64]) {
