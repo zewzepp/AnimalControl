@@ -1,5 +1,22 @@
 // src/weapon.rs
+
+#[derive(Clone, Copy, PartialEq)]
+pub enum Kind {
+    Ar,
+    Sniper,
+}
+
+impl Kind {
+    pub fn name(&self) -> &'static str {
+        match self {
+            Kind::Ar => "AR",
+            Kind::Sniper => "SNIPER",
+        }
+    }
+}
+
 pub struct Weapon {
+    pub kind: Kind,
     pub mag: i32,
     pub reserve: i32,
     pub mag_size: i32,
@@ -8,19 +25,37 @@ pub struct Weapon {
     pub reloading: f32,
     pub reload_time: f32,
     pub bloom: f32,
+    pub damage: f32,
 }
 
 impl Weapon {
-    pub fn new() -> Self {
-        Self {
-            mag: 30,
-            reserve: 150,
-            mag_size: 30,
-            cooldown: 0.0,
-            fire_interval: 0.095,
-            reloading: 0.0,
-            reload_time: 1.9,
-            bloom: 0.0,
+    pub fn new(kind: Kind) -> Self {
+        match kind {
+            Kind::Ar => Self {
+                kind,
+                mag: 30,
+                reserve: 150,
+                mag_size: 30,
+                cooldown: 0.0,
+                fire_interval: 0.095,
+                reloading: 0.0,
+                reload_time: 1.9,
+                bloom: 0.0,
+                damage: 34.0,
+            },
+            // bolt-action: one shot kills (bots have 100 health)
+            Kind::Sniper => Self {
+                kind,
+                mag: 5,
+                reserve: 30,
+                mag_size: 5,
+                cooldown: 0.0,
+                fire_interval: 1.25,
+                reloading: 0.0,
+                reload_time: 2.8,
+                bloom: 0.0,
+                damage: 100.0,
+            },
         }
     }
 
@@ -31,7 +66,9 @@ impl Weapon {
     pub fn fire(&mut self) {
         self.mag -= 1;
         self.cooldown = self.fire_interval;
-        self.bloom = (self.bloom + 0.004).min(0.025);
+        if self.kind == Kind::Ar {
+            self.bloom = (self.bloom + 0.004).min(0.025);
+        }
     }
 
     pub fn start_reload(&mut self) {
@@ -57,15 +94,32 @@ impl Weapon {
         }
     }
 
-    pub fn spread(&self, scoped: bool, sliding: bool) -> f32 {
-        if scoped {
-            return 0.0;
+    /// `aiming` = scope (sniper) or iron sights (AR).
+    pub fn spread(&self, aiming: bool, sliding: bool) -> f32 {
+        match self.kind {
+            Kind::Ar => {
+                if aiming {
+                    // iron sights: much tighter, not perfect
+                    return 0.0004 + self.bloom * 0.2;
+                }
+                let mut s = 0.0015 + self.bloom;
+                if sliding {
+                    s += 0.008;
+                }
+                s
+            }
+            Kind::Sniper => {
+                if aiming {
+                    return 0.0;
+                }
+                // hip-firing a sniper is wild
+                let mut s = 0.05;
+                if sliding {
+                    s += 0.02;
+                }
+                s
+            }
         }
-        let mut s = 0.0015 + self.bloom;
-        if sliding {
-            s += 0.008;
-        }
-        s
     }
 
     pub fn reload_progress(&self) -> f32 {

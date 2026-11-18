@@ -25,6 +25,7 @@ pub struct TouchFrame {
     pub scope_held: bool,
     pub scope_pressed: bool,     // edge (used for toggle scope)
     pub menu_pressed: bool,      // MENU button tapped
+    pub switch_to: Option<usize>, // weapon slot tapped (0 = gun, 1 = melee)
     pub aim_delta: Vec2,         // pixel delta on the aim side this frame
 }
 
@@ -32,6 +33,7 @@ pub struct TouchFrame {
 #[derive(Clone, Copy)]
 enum Target {
     Menu,
+    Switch(usize),
     Button(usize),
     Joy,
     Aim,
@@ -41,6 +43,7 @@ enum Target {
 #[derive(Default)]
 struct Pressed {
     menu: bool,
+    switch: Option<usize>,
     jump: bool,
     reload: bool,
     scope: bool,
@@ -74,6 +77,11 @@ fn grow(r: Rect, m: f32) -> Rect {
 fn hit_target(st: &Settings, w: f32, h: f32, pos: Vec2) -> Target {
     if grow(menu_button_rect(w, h), HIT_SLOP).contains(pos) {
         return Target::Menu;
+    }
+    for (i, r) in weapon_slot_rects(w, h).iter().enumerate() {
+        if grow(*r, HIT_SLOP).contains(pos) {
+            return Target::Switch(i);
+        }
     }
 
     // Buttons get a little slop; if the slop zones of two buttons overlap, the
@@ -126,6 +134,7 @@ impl TouchControls {
     ) {
         match hit_target(st, w, h, pos) {
             Target::Menu => pr.menu = true,
+            Target::Switch(i) => pr.switch = Some(i),
             Target::Button(i) => {
                 // a second finger on a button that is already held does nothing
                 if !tap && self.btn_touch[i].is_some() {
@@ -254,6 +263,7 @@ impl TouchControls {
             scope_held: self.btn_touch[BTN_SCOPE].is_some(),
             scope_pressed: pr.scope,
             menu_pressed: pr.menu,
+            switch_to: pr.switch,
             aim_delta,
         }
     }
@@ -343,4 +353,16 @@ impl TouchControls {
 /// easy to hit.
 pub fn menu_button_rect(w: f32, _h: f32) -> Rect {
     Rect::new(w - 150.0, 56.0, 120.0, 52.0)
+}
+
+/// Two weapon slots (gun, melee) at the top centre of the screen.
+pub fn weapon_slot_rects(w: f32, _h: f32) -> [Rect; 2] {
+    let sw = 110.0;
+    let sh = 50.0;
+    let gap = 8.0;
+    let x = w * 0.5 - sw - gap * 0.5;
+    [
+        Rect::new(x, 14.0, sw, sh),
+        Rect::new(x + sw + gap, 14.0, sw, sh),
+    ]
 }

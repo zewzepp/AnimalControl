@@ -11,11 +11,11 @@ use macroquad::audio::{play_sound, PlaySoundParams, Sound};
 use macroquad::prelude::*;
 
 use map::{los_clear, ray_aabb, spread_dir, Map};
-use mobile::{menu_button_rect, TouchControls, MOBILE_AIM_SCALE};
+use mobile::{menu_button_rect, weapon_slot_rects, TouchControls, MOBILE_AIM_SCALE};
 use player::Player;
 use settings::{Menu, MenuAction, Settings};
 use sfx::Sfx;
-use weapon::Weapon;
+use weapon::{Kind, Weapon};
 
 struct Tracer {
     a: Vec3,
@@ -41,6 +41,7 @@ struct GunXf {
     ay: Vec2,
     k: f32,
     alpha: f32,
+    mx: f32, // muzzle distance along the barrel (local units)
 }
 
 impl GunXf {
@@ -67,6 +68,122 @@ fn arm_quad(from: Vec2, dir: Vec2, len: f32, half: f32, col: Color, alpha: f32) 
     tri_quad(from + perp, from - perp, end - perp * 1.25, end + perp * 1.25, c);
 }
 
+fn gun_quad(xf: &GunXf, p: [(f32, f32); 4], col: Color) {
+    let c = Color::new(col.r, col.g, col.b, col.a * xf.alpha);
+    tri_quad(xf.pt(p[0].0, p[0].1), xf.pt(p[1].0, p[1].1), xf.pt(p[2].0, p[2].1), xf.pt(p[3].0, p[3].1), c);
+}
+
+const SKIN: Color = Color::new(0.93, 0.74, 0.58, 1.0);
+const SKIN_SHADE: Color = Color::new(0.80, 0.60, 0.46, 1.0);
+const SLEEVE: Color = Color::new(0.22, 0.32, 0.28, 1.0);
+const CUFF: Color = Color::new(0.30, 0.42, 0.36, 1.0);
+const BODY: Color = Color::new(0.17, 0.18, 0.20, 1.0);
+const DARK: Color = Color::new(0.09, 0.09, 0.11, 1.0);
+const ACCENT: Color = Color::new(0.32, 0.34, 0.38, 1.0);
+
+/// Grip hand + support hand shared by the two guns. `sx` = where the support hand sits.
+fn draw_gun_hands(xf: &GunXf, sx: f32) {
+    let k = xf.k;
+    // forearms (behind the hands)
+    arm_quad(xf.pt(-34.0, 52.0), vec2(0.45, 1.0), 520.0 * k, 40.0 * k, SLEEVE, xf.alpha);
+    arm_quad(xf.pt(sx + 30.0, 44.0), vec2(-0.30, 1.0), 520.0 * k, 36.0 * k, SLEEVE, xf.alpha);
+    // cuffs
+    let c1 = xf.pt(-34.0, 52.0);
+    arm_quad(c1, vec2(0.45, 1.0), 40.0 * k, 41.0 * k, CUFF, xf.alpha);
+    let c2 = xf.pt(sx + 30.0, 44.0);
+    arm_quad(c2, vec2(-0.30, 1.0), 36.0 * k, 37.0 * k, CUFF, xf.alpha);
+
+    // grip hand: palm wrapped round the grip, thumb over the receiver, finger on the trigger
+    gun_rect(xf, -60.0, 24.0, -6.0, 66.0, SKIN);
+    gun_rect(xf, -60.0, 56.0, -6.0, 66.0, SKIN_SHADE);
+    gun_rect(xf, -24.0, 0.0, 30.0, 20.0, SKIN); // thumb
+    gun_rect(xf, -6.0, 18.0, 26.0, 28.0, SKIN); // trigger finger
+
+    // support hand: palm under the handguard, fingers curled over the top
+    gun_rect(xf, sx, 12.0, sx + 86.0, 46.0, SKIN);
+    gun_rect(xf, sx, 38.0, sx + 86.0, 46.0, SKIN_SHADE);
+    gun_rect(xf, sx + 6.0, -16.0, sx + 80.0, -4.0, SKIN); // fingers on top
+    gun_rect(xf, sx - 8.0, -2.0, sx + 20.0, 14.0, SKIN); // thumb
+}
+
+fn draw_ar(xf: &GunXf) {
+    gun_rect(xf, -150.0, -6.0, -62.0, 22.0, DARK); // stock
+    gun_rect(xf, -62.0, -16.0, 150.0, 18.0, BODY); // receiver
+    gun_rect(xf, -20.0, -23.0, 125.0, -16.0, ACCENT); // top rail
+    gun_rect(xf, -10.0, -30.0, 4.0, -23.0, DARK); // rear sight
+    gun_rect(xf, 110.0, -14.0, 215.0, 14.0, ACCENT); // handguard
+    gun_rect(xf, 215.0, -6.0, 285.0, 6.0, DARK); // barrel
+    gun_rect(xf, 275.0, -9.0, 288.0, 9.0, DARK); // muzzle brake
+    gun_rect(xf, 230.0, -24.0, 240.0, -6.0, DARK); // front sight post
+    gun_quad(xf, [(22.0, 18.0), (54.0, 18.0), (66.0, 78.0), (36.0, 82.0)], DARK); // magazine
+    gun_quad(xf, [(-44.0, 18.0), (-14.0, 18.0), (-26.0, 66.0), (-56.0, 64.0)], BODY); // grip
+    draw_gun_hands(xf, 120.0);
+}
+
+fn draw_sniper(xf: &GunXf) {
+    gun_rect(xf, -190.0, -8.0, -62.0, 26.0, DARK); // stock
+    gun_rect(xf, -150.0, -16.0, -90.0, -8.0, BODY); // cheek rest
+    gun_rect(xf, -62.0, -14.0, 120.0, 16.0, BODY); // receiver
+    gun_rect(xf, 120.0, -10.0, 250.0, 10.0, ACCENT); // handguard
+    gun_rect(xf, 250.0, -5.0, 370.0, 5.0, DARK); // barrel
+    gun_rect(xf, 350.0, -9.0, 376.0, 9.0, DARK); // muzzle brake
+    gun_rect(xf, 0.0, -40.0, 170.0, -24.0, DARK); // scope tube
+    gun_rect(xf, -6.0, -45.0, 6.0, -19.0, ACCENT); // eyepiece
+    gun_rect(xf, 164.0, -48.0, 178.0, -16.0, ACCENT); // objective bell
+    gun_rect(xf, 20.0, -24.0, 32.0, -14.0, ACCENT); // mount
+    gun_rect(xf, 130.0, -24.0, 142.0, -14.0, ACCENT); // mount
+    gun_rect(xf, -34.0, -10.0, -14.0, -2.0, ACCENT); // bolt handle
+    gun_rect(xf, 10.0, 16.0, 46.0, 40.0, DARK); // magazine
+    gun_quad(xf, [(-44.0, 16.0), (-14.0, 16.0), (-26.0, 66.0), (-56.0, 64.0)], BODY); // grip
+    draw_gun_hands(xf, 135.0);
+}
+
+fn draw_knife(xf: &GunXf) {
+    let k = xf.k;
+    arm_quad(xf.pt(-60.0, 6.0), vec2(0.55, 1.0), 560.0 * k, 44.0 * k, SLEEVE, xf.alpha);
+    arm_quad(xf.pt(-60.0, 6.0), vec2(0.55, 1.0), 44.0 * k, 45.0 * k, CUFF, xf.alpha);
+    // blade
+    gun_quad(xf, [(24.0, -14.0), (180.0, -14.0), (236.0, 2.0), (24.0, 8.0)], Color::new(0.78, 0.80, 0.85, 1.0));
+    gun_rect(xf, 24.0, -14.0, 182.0, -8.0, Color::new(0.94, 0.95, 1.0, 1.0)); // spine highlight
+    gun_rect(xf, 8.0, -24.0, 24.0, 20.0, DARK); // guard
+    gun_rect(xf, -92.0, -10.0, 8.0, 12.0, Color::new(0.27, 0.18, 0.12, 1.0)); // handle
+    // fist
+    gun_rect(xf, -86.0, -16.0, -6.0, 20.0, SKIN);
+    gun_rect(xf, -86.0, 12.0, -6.0, 20.0, SKIN_SHADE);
+    gun_rect(xf, -56.0, -24.0, 2.0, -12.0, SKIN); // thumb
+}
+
+fn draw_iron_sights(w: f32, h: f32, a: f32) {
+    let cx = w * 0.5;
+    let cy = h * 0.5;
+    let body = Color::new(0.13, 0.14, 0.16, 0.97 * a);
+    let rail = Color::new(0.28, 0.30, 0.34, a);
+    let dark = Color::new(0.05, 0.05, 0.06, a);
+    // rifle seen from behind
+    tri_quad(
+        vec2(cx - 0.24 * h, h),
+        vec2(cx + 0.24 * h, h),
+        vec2(cx + 0.085 * h, cy + 0.21 * h),
+        vec2(cx - 0.085 * h, cy + 0.21 * h),
+        body,
+    );
+    tri_quad(
+        vec2(cx - 0.05 * h, h),
+        vec2(cx + 0.05 * h, h),
+        vec2(cx + 0.035 * h, cy + 0.21 * h),
+        vec2(cx - 0.035 * h, cy + 0.21 * h),
+        rail,
+    );
+    // rear sight posts
+    draw_rectangle(cx - 0.085 * h, cy + 0.135 * h, 0.035 * h, 0.08 * h, dark);
+    draw_rectangle(cx + 0.05 * h, cy + 0.135 * h, 0.035 * h, 0.08 * h, dark);
+    // front sight post with guards; tip sits on the crosshair
+    draw_rectangle(cx - 0.0045 * h, cy, 0.009 * h, 0.135 * h, dark);
+    draw_rectangle(cx - 0.032 * h, cy + 0.03 * h, 0.007 * h, 0.105 * h, dark);
+    draw_rectangle(cx + 0.025 * h, cy + 0.03 * h, 0.007 * h, 0.105 * h, dark);
+    draw_circle(cx, cy, 0.006 * h, Color::new(1.0, 0.2, 0.1, a));
+}
+
 struct Game {
     map: Map,
     player: Player,
@@ -74,6 +191,11 @@ struct Game {
     bots: Vec<bots::Bot>,
     tracers: Vec<Tracer>,
     sparks: Vec<Spark>,
+    /// true while the knife is held instead of the gun
+    held_melee: bool,
+    melee_cd: f32,
+    swing_t: f32,
+    switch_t: f32,
     sfx: Sfx,
     hitmarker: f32,
     damage_flash: f32,
@@ -93,9 +215,11 @@ struct Game {
 }
 
 /// Scope zoom length in seconds.
-const ZOOM_TIME: f32 = 0.35;
+const ZOOM_TIME: f32 = 0.15;
 const FOV_NORMAL: f32 = 78.0;
-const FOV_SCOPED: f32 = 26.0;
+const FOV_SNIPER: f32 = 26.0;
+/// Iron sights only zoom a little.
+const FOV_AR_ADS: f32 = 62.0;
 /// The vignette quad is drawn this many screen-heights wide.
 const VIGNETTE_SPAN: f32 = 2.6;
 
@@ -168,10 +292,14 @@ impl Game {
         Self {
             map,
             player,
-            weapon: Weapon::new(),
+            weapon: Weapon::new(Kind::Ar),
             bots,
             tracers: Vec::new(),
             sparks: Vec::new(),
+            held_melee: false,
+            melee_cd: 0.0,
+            swing_t: 0.0,
+            switch_t: 0.0,
             sfx,
             hitmarker: 0.0,
             damage_flash: 0.0,
@@ -206,6 +334,7 @@ impl Game {
     }
 
     fn resume(&mut self) {
+        self.apply_loadout();
         self.paused = false;
         self.menu.reset();
         self.touch.reset();
@@ -234,6 +363,9 @@ impl Game {
 
         // --- timers
         self.hitmarker = (self.hitmarker - dt).max(0.0);
+        self.melee_cd = (self.melee_cd - dt).max(0.0);
+        self.swing_t = (self.swing_t - dt).max(0.0);
+        self.switch_t = (self.switch_t - dt).max(0.0);
         self.damage_flash = (self.damage_flash - dt).max(0.0);
         self.muzzle = (self.muzzle - dt).max(0.0);
         for t in self.tracers.iter_mut() {
@@ -259,8 +391,38 @@ impl Game {
         self.player.mobile_fire = tf.fire_held;
         // SLIDE button: while walking a tap toggles sneak; while running it slides
         let running = tf.movement.length_squared() > 0.5;
-        if tf.slide_pressed && !running && self.player.alive {
-            self.player.sneak = !self.player.sneak;
+        if tf.slide_pressed && self.player.alive {
+            if self.player.sneak {
+                // stand up, whether walking or running
+                self.player.sneak = false;
+            } else if !running {
+                self.player.sneak = true;
+            }
+        }
+
+        // weapon slots (tap the gun / knife box, or keys 1 / 2)
+        let mut want = tf.switch_to;
+        if is_key_pressed(KeyCode::Key1) {
+            want = Some(0);
+        }
+        if is_key_pressed(KeyCode::Key2) {
+            want = Some(1);
+        }
+        if let Some(i) = want {
+            self.select_slot(i == 1);
+        }
+
+        // per-weapon feel
+        let (scope_look, scope_speed) = match self.weapon.kind {
+            Kind::Sniper => (0.45, 3.6),
+            Kind::Ar => (0.8, 4.8),
+        };
+        self.player.scope_look = scope_look;
+        self.player.scope_speed = scope_speed;
+        self.player.speed_mul = if self.held_melee { 1.12 } else { 1.0 };
+        self.player.run_cancels_sneak = self.settings.run_cancels_sneak;
+        if self.held_melee {
+            self.player.mobile_scope = false;
         }
         // scope is a toggle: tap SCOPE to zoom in, tap again to zoom out
         if tf.scope_pressed {
@@ -294,7 +456,8 @@ impl Game {
         // --- scope
         self.player.scoped = (is_mouse_button_down(MouseButton::Right)
             || self.player.mobile_scope)
-            && self.player.alive;
+            && self.player.alive
+            && !self.held_melee;
 
         // smooth zoom in/out
         let zoom_target = if self.player.scoped { 1.0 } else { 0.0 };
@@ -321,7 +484,14 @@ impl Game {
         // --- weapon
         self.weapon.update(dt);
 
-        if self.player.alive {
+        if self.player.alive && self.held_melee {
+            if (is_mouse_button_down(MouseButton::Left) || self.player.mobile_fire)
+                && self.melee_cd <= 0.0
+                && self.switch_t <= 0.0
+            {
+                self.melee_attack();
+            }
+        } else if self.player.alive {
             // reload (keyboard R OR mobile reload button)
             if is_key_pressed(KeyCode::R) || tf.reload_pressed {
                 let was = self.weapon.reloading;
@@ -347,6 +517,7 @@ impl Game {
             // fire
             if (is_mouse_button_down(MouseButton::Left) || self.player.mobile_fire)
                 && self.weapon.can_fire()
+                && self.switch_t <= 0.0
             {
                 self.fire();
             }
@@ -386,17 +557,25 @@ impl Game {
     }
 
     fn fire(&mut self) {
+        let sniper = self.weapon.kind == Kind::Sniper;
         self.weapon.fire();
-        self.muzzle = 0.06;
+        self.muzzle = if sniper { 0.09 } else { 0.06 };
 
         // medium kick, capped so sustained fire can't run away
-        self.player.recoil_pitch =
-            (self.player.recoil_pitch + 0.009 + macroquad::rand::gen_range(0.0f32, 0.005)).min(0.14);
+        let (kick, kick_rand, yaw_r) = if sniper {
+            (0.04f32, 0.01f32, 0.012f32)
+        } else {
+            (0.009, 0.005, 0.006)
+        };
+        self.player.recoil_pitch = (self.player.recoil_pitch
+            + kick
+            + macroquad::rand::gen_range(0.0f32, kick_rand))
+        .min(0.14);
         self.player.recoil_yaw = (self.player.recoil_yaw
-            + macroquad::rand::gen_range(-0.006f32, 0.006))
+            + macroquad::rand::gen_range(-yaw_r, yaw_r))
         .clamp(-0.05, 0.05);
 
-        self.play(&self.sfx.shoot, 0.5);
+        self.play(&self.sfx.shoot, if sniper { 0.9 } else { 0.5 });
 
         let eye = self.player.eye_pos();
         let dir = self.player.aim_dir();
@@ -436,12 +615,17 @@ impl Game {
         let right = dir.cross(up).normalize_or_zero();
         let upv = right.cross(dir);
         let muzzle = eye + dir * 0.9 + right * 0.22 - upv * 0.16;
+        let (tl, tcol) = if sniper {
+            (0.3, Color::new(0.6, 0.85, 1.0, 1.0))
+        } else {
+            (0.16, Color::new(1.0, 0.8, 0.35, 1.0))
+        };
         self.tracers.push(Tracer {
             a: muzzle,
             b: end,
-            life: 0.16,
-            max: 0.16,
-            col: Color::new(1.0, 0.8, 0.35, 1.0),
+            life: tl,
+            max: tl,
+            col: tcol,
         });
         if best_t.is_finite() {
             let (col, n) = if best_bot.is_some() {
@@ -449,42 +633,108 @@ impl Game {
             } else {
                 (Color::new(1.0, 0.9, 0.55, 1.0), 6)
             };
-            for _ in 0..n {
-                let r = vec3(
-                    macroquad::rand::gen_range(-1.0f32, 1.0),
-                    macroquad::rand::gen_range(-0.2f32, 1.0),
-                    macroquad::rand::gen_range(-1.0f32, 1.0),
-                );
-                let life = macroquad::rand::gen_range(0.18f32, 0.4);
-                self.sparks.push(Spark {
-                    pos: end - d * 0.05,
-                    vel: -d * macroquad::rand::gen_range(1.0f32, 3.0) + r * 2.5,
-                    life,
-                    max: life,
-                    col,
-                });
-            }
+            self.spawn_sparks(end - d * 0.05, d, col, n);
         }
 
         if let Some(i) = best_bot {
-            self.hitmarker = 0.15;
-            self.play(&self.sfx.hit, 0.35);
+            let dmg = self.weapon.damage;
+            self.damage_bot(i, dmg);
+        }
+    }
 
-            let mut killed = false;
-            {
-                let bot = &mut self.bots[i];
-                bot.health -= 34.0;
-                bot.hit_flash = 0.12;
-                if bot.health <= 0.0 && bot.alive {
-                    bot.alive = false;
-                    bot.respawn_t = 3.0;
-                    killed = true;
+    fn spawn_sparks(&mut self, pos: Vec3, d: Vec3, col: Color, n: usize) {
+        for _ in 0..n {
+            let r = vec3(
+                macroquad::rand::gen_range(-1.0f32, 1.0),
+                macroquad::rand::gen_range(-0.2f32, 1.0),
+                macroquad::rand::gen_range(-1.0f32, 1.0),
+            );
+            let life = macroquad::rand::gen_range(0.18f32, 0.4);
+            self.sparks.push(Spark {
+                pos,
+                vel: -d * macroquad::rand::gen_range(1.0f32, 3.0) + r * 2.5,
+                life,
+                max: life,
+                col,
+            });
+        }
+    }
+
+    fn damage_bot(&mut self, i: usize, dmg: f32) {
+        self.hitmarker = 0.15;
+        self.play(&self.sfx.hit, 0.35);
+
+        let mut killed = false;
+        {
+            let bot = &mut self.bots[i];
+            bot.health -= dmg;
+            bot.hit_flash = 0.12;
+            if bot.health <= 0.0 && bot.alive {
+                bot.alive = false;
+                bot.respawn_t = 3.0;
+                killed = true;
+            }
+        }
+        if killed {
+            self.score += 1;
+            self.play(&self.sfx.kill, 0.5);
+        }
+    }
+
+    /// Knife swing: short reach, hits the nearest enemy in front (walls block it).
+    fn melee_attack(&mut self) {
+        self.melee_cd = 0.45;
+        self.swing_t = 0.25;
+        self.play(&self.sfx.slide, 0.3);
+
+        let eye = self.player.eye_pos();
+        let d = self.player.aim_dir();
+        let reach = 2.6;
+
+        let mut wall_t = f32::INFINITY;
+        for b in &self.map.boxes {
+            if let Some(t) = ray_aabb(eye, d, b) {
+                wall_t = wall_t.min(t);
+            }
+        }
+        let mut best: Option<(usize, f32)> = None;
+        for (i, bot) in self.bots.iter().enumerate() {
+            if !bot.alive {
+                continue;
+            }
+            if let Some(t) = ray_aabb(eye, d, &bot.bounds()) {
+                if t <= reach && t < wall_t && best.map_or(true, |(_, bt)| t < bt) {
+                    best = Some((i, t));
                 }
             }
-            if killed {
-                self.score += 1;
-                self.play(&self.sfx.kill, 0.5);
-            }
+        }
+        if let Some((i, t)) = best {
+            self.damage_bot(i, 60.0);
+            self.spawn_sparks(eye + d * t, d, Color::new(1.0, 0.25, 0.15, 1.0), 8);
+        }
+    }
+
+    /// Swap between the gun (false) and the knife (true).
+    fn select_slot(&mut self, melee: bool) {
+        if melee == self.held_melee || !self.player.alive {
+            return;
+        }
+        self.held_melee = melee;
+        self.switch_t = 0.28;
+        self.swing_t = 0.0;
+        self.weapon.reloading = 0.0;
+        self.player.mobile_scope = false;
+        self.play(&self.sfx.reload, 0.15);
+    }
+
+    /// Apply the loadout chosen in the menu (new gun starts with full ammo).
+    fn apply_loadout(&mut self) {
+        if self.weapon.kind != self.settings.primary {
+            self.weapon = Weapon::new(self.settings.primary);
+            self.held_melee = false;
+            self.player.mobile_scope = false;
+            self.zoom = 0.0;
+            self.switch_t = 0.28;
         }
     }
 
@@ -538,36 +788,54 @@ impl Game {
         1.0
     }
 
-    /// Where the first-person gun sits on screen, with bob / kick / reload / slide animation.
+    /// Where the held weapon sits on screen, with bob / kick / reload / slash / draw-in animation.
     fn gun_xf(&self) -> GunXf {
         let w = screen_width();
         let h = screen_height();
-        let k = h / 720.0 * 0.9;
+        let k = h / 720.0 * 0.95;
         let p = &self.player;
-        let ez = ease(self.zoom);
-        let alpha = (1.0 - ez * 2.0).clamp(0.0, 1.0);
+        let melee = self.held_melee;
+        let sniper = self.weapon.kind == Kind::Sniper;
+        let ez = if melee { 0.0 } else { ease(self.zoom) };
+        let alpha = (1.0 - ez * 2.5).clamp(0.0, 1.0);
 
         let moving = if p.on_ground && !p.sliding {
             (p.speed_now / 8.4).min(1.0)
         } else {
             0.0
         };
-        let mut off = vec2(
+        let bob = vec2(
             p.bob.sin() * 8.0 * moving * k,
             (p.bob * 2.0).sin().abs() * 9.0 * moving * k,
         );
-        let kick = (self.weapon.cooldown / self.weapon.fire_interval).clamp(0.0, 1.0);
-        let sprintf = ((p.speed_now - 6.5) / 2.0).clamp(0.0, 1.0) * if p.on_ground { 1.0 } else { 0.0 };
+        let sprintf =
+            ((p.speed_now - 6.5) / 2.0).clamp(0.0, 1.0) * if p.on_ground { 1.0 } else { 0.0 };
 
-        let base = vec2(w * 0.68 + off.x, h * 0.97 + off.y);
-        let c = vec2(w * 0.5, h * 0.5);
-        let mut ang = (c.y - base.y).atan2(c.x - base.x);
-
-        // kick: slide back and muzzle climbs
-        ang += 0.07 * kick;
+        // gun: higher up the screen, muzzle ends just right/below the crosshair
+        let c = vec2(w * 0.5 + 62.0 * k, h * 0.5 + 80.0 * k);
+        let (base, mx) = if melee {
+            (vec2(w * 0.74, h * 0.90), 0.0)
+        } else if sniper {
+            (vec2(w * 0.72 + bob.x, h * 0.88 + bob.y), 370.0)
+        } else {
+            (vec2(w * 0.68 + bob.x, h * 0.82 + bob.y), 285.0)
+        };
+        let target = if melee { vec2(w * 0.52, h * 0.30) } else { c };
+        let mut ang = (target.y - base.y).atan2(target.x - base.x);
         let mut pos = base;
+
+        // kick (gun muzzle climbs and slides back)
+        let win = self.weapon.fire_interval.min(0.12);
+        let kick = if melee {
+            0.0
+        } else {
+            ((self.weapon.cooldown - (self.weapon.fire_interval - win)).max(0.0) / win)
+                .clamp(0.0, 1.0)
+        };
+        ang += 0.07 * kick;
+
         // reload dip
-        if self.weapon.reloading > 0.0 {
+        if !melee && self.weapon.reloading > 0.0 {
             let dip = (self.weapon.reload_progress() * std::f32::consts::PI).sin();
             pos.y += 190.0 * k * dip;
             ang -= 0.35 * dip;
@@ -579,19 +847,32 @@ impl Game {
             pos.y += 30.0 * k;
             ang -= 0.14;
         }
-        off = vec2(ang.cos(), ang.sin());
-        pos -= off * (22.0 * k * kick);
+        // knife slash
+        if melee && self.swing_t > 0.0 {
+            let q = 1.0 - self.swing_t / 0.25;
+            let sw = (q * std::f32::consts::PI).sin();
+            pos.x -= 200.0 * k * sw;
+            pos.y -= 60.0 * k * sw;
+            ang -= 0.7 * sw;
+        }
+        // draw-in when switching weapons
+        let sw = (self.switch_t / 0.28).clamp(0.0, 1.0);
+        pos.y += sw * sw * 260.0 * k;
+
+        let ax = vec2(ang.cos(), ang.sin());
+        pos -= ax * (22.0 * k * kick);
 
         GunXf {
             p: pos,
-            ax: off,
+            ax,
             ay: vec2(ang.sin(), -ang.cos()),
             k,
             alpha,
+            mx,
         }
     }
 
-    /// Blocky first-person arms and rifle in the lower right.
+    /// Blocky first-person arms with the held weapon.
     fn draw_viewmodel(&self) {
         if !self.player.alive || self.paused {
             return;
@@ -600,33 +881,13 @@ impl Game {
         if xf.alpha <= 0.01 {
             return;
         }
-        let k = xf.k;
-        let sleeve = Color::new(0.22, 0.32, 0.28, 1.0);
-        let skin = Color::new(0.93, 0.74, 0.58, 1.0);
-        let body = Color::new(0.17, 0.18, 0.20, 1.0);
-        let dark = Color::new(0.09, 0.09, 0.11, 1.0);
-        let accent = Color::new(0.32, 0.34, 0.38, 1.0);
-
-        // arms first (behind the gun)
-        let a1 = xf.pt(-25.0, 40.0);
-        arm_quad(a1, vec2(0.35, 1.0), 520.0 * k, 36.0 * k, sleeve, xf.alpha);
-        let a2 = xf.pt(115.0, 26.0);
-        arm_quad(a2, vec2(-0.55, 1.0), 520.0 * k, 32.0 * k, sleeve, xf.alpha);
-
-        // gun
-        gun_rect(&xf, -150.0, -8.0, -60.0, 18.0, dark); // stock
-        gun_rect(&xf, -60.0, -16.0, 150.0, 16.0, body); // receiver
-        gun_rect(&xf, -20.0, -22.0, 120.0, -16.0, accent); // top rail
-        gun_rect(&xf, 150.0, -7.0, 270.0, 7.0, dark); // barrel
-        gun_rect(&xf, 232.0, -16.0, 244.0, -7.0, accent); // front sight
-        gun_rect(&xf, 20.0, 16.0, 52.0, 72.0, dark); // magazine
-        gun_rect(&xf, -40.0, 16.0, -10.0, 62.0, body); // grip
-        gun_rect(&xf, 80.0, 16.0, 150.0, 24.0, accent); // handguard underside
-
-        // hands on top
-        gun_rect(&xf, -48.0, 18.0, 6.0, 70.0, skin); // trigger hand
-        gun_rect(&xf, -8.0, 16.0, 20.0, 36.0, skin); // fingers
-        gun_rect(&xf, 84.0, 6.0, 152.0, 38.0, skin); // support hand
+        if self.held_melee {
+            draw_knife(&xf);
+        } else if self.weapon.kind == Kind::Sniper {
+            draw_sniper(&xf);
+        } else {
+            draw_ar(&xf);
+        }
     }
 
     fn draw(&mut self) {
@@ -641,7 +902,11 @@ impl Game {
             self.player.pitch = 0.0;
         }
 
-        let fov: f32 = FOV_NORMAL + (FOV_SCOPED - FOV_NORMAL) * ease(self.zoom);
+        let fov_scoped = match self.weapon.kind {
+            Kind::Sniper => FOV_SNIPER,
+            Kind::Ar => FOV_AR_ADS,
+        };
+        let fov: f32 = FOV_NORMAL + (fov_scoped - FOV_NORMAL) * ease(self.zoom);
         let camera = self.player.camera(fov.to_radians());
         set_camera(&camera);
 
@@ -715,7 +980,7 @@ impl Game {
 
         // ---------- scope overlay: soft vignette + thin ring, fading in with the zoom
         let ez = ease(self.zoom);
-        if ez > 0.001 {
+        if ez > 0.001 && self.weapon.kind == Kind::Sniper {
             let side = h * VIGNETTE_SPAN;
             draw_texture_ex(
                 &self.vignette,
@@ -739,6 +1004,11 @@ impl Game {
             draw_circle(cx, cy, 1.8, Color::new(0.9, 0.1, 0.1, ez));
         }
 
+        // ---------- AR iron sights (no scope overlay)
+        if self.weapon.kind == Kind::Ar && !self.held_melee && ez > 0.01 {
+            draw_iron_sights(w, h, ez);
+        }
+
         // ---------- dynamic crosshair (fades out as the scope fades in)
         if ez < 0.999 {
             let gap = 5.0 + self.weapon.bloom * 900.0;
@@ -752,9 +1022,9 @@ impl Game {
         }
 
         // ---------- muzzle flash (screen centre = exactly on the crosshair)
-        if self.muzzle > 0.0 && ez < 0.5 && self.player.alive {
+        if self.muzzle > 0.0 && ez < 0.5 && self.player.alive && !self.held_melee {
             let xf = self.gun_xf();
-            let m = xf.pt(285.0, 0.0);
+            let m = xf.pt(xf.mx, 0.0);
             let (cx, cy) = (m.x, m.y);
             let k = (self.muzzle / 0.06).clamp(0.0, 1.0);
             let outer = Color::new(1.0, 0.75, 0.2, 0.9 * k);
@@ -812,12 +1082,16 @@ impl Game {
         );
 
         // ---------- ammo
-        let ammo = format!("{} / {}", self.weapon.mag, self.weapon.reserve);
+        let ammo = if self.held_melee {
+            "KNIFE".to_string()
+        } else {
+            format!("{} / {}", self.weapon.mag, self.weapon.reserve)
+        };
         let ts = measure_text(&ammo, None, 34, 1.0);
         draw_text(&ammo, w - 50.0 - ts.width, h - 56.0, 34.0, WHITE);
 
         // ---------- reload bar
-        if self.weapon.reloading > 0.0 {
+        if self.weapon.reloading > 0.0 && !self.held_melee {
             let p = self.weapon.reload_progress();
             draw_text(
                 "RELOADING",
@@ -862,11 +1136,24 @@ impl Game {
             hints.push("SNEAKING");
         }
         if self.player.scoped {
-            hints.push("SCOPED");
+            hints.push(if self.weapon.kind == Kind::Sniper { "SCOPED" } else { "ADS" });
         }
         for hint in hints {
             draw_text(hint, 40.0, y, 22.0, Color::new(0.5, 1.0, 0.9, 0.9));
             y += 26.0;
+        }
+
+        // ---------- weapon slots (tap to change the weapon you hold)
+        let slots = weapon_slot_rects(w, h);
+        let labels = [self.weapon.kind.name(), "KNIFE"];
+        for i in 0..2 {
+            let active = (i == 1) == self.held_melee;
+            let col = if active {
+                Color::new(0.25, 0.7, 0.4, 1.0)
+            } else {
+                Color::new(0.35, 0.4, 0.5, 1.0)
+            };
+            TouchControls::draw_button(slots[i], labels[i], active, col, self.settings.hud_opacity.max(0.6));
         }
 
         // ---------- dead overlay

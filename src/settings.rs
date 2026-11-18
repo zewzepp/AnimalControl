@@ -1,6 +1,7 @@
 // src/settings.rs
 // Player settings (sensitivity, volume, HUD) plus the in-game settings menu.
 
+use crate::weapon::Kind;
 use macroquad::prelude::*;
 
 pub const BTN_FIRE: usize = 0;
@@ -50,6 +51,10 @@ fn element_name(i: usize) -> &'static str {
 
 #[derive(Clone)]
 pub struct Settings {
+    /// Running stands you up from a toggled sneak.
+    pub run_cancels_sneak: bool,
+    /// Chosen primary weapon (applies when the menu closes).
+    pub primary: Kind,
     /// Look sensitivity multiplier while NOT scoped (1.0 = default).
     pub sens_camera: f32,
     /// Look sensitivity multiplier while scoped (1.0 = default; the game
@@ -72,6 +77,8 @@ pub struct Settings {
 impl Settings {
     pub fn new() -> Self {
         Self {
+            run_cancels_sneak: true,
+            primary: Kind::Ar,
             sens_camera: 1.0,
             sens_scope: 1.0,
             volume: 1.0,
@@ -171,6 +178,8 @@ enum Page {
     Main,
     Sens,
     Edit,
+    Gameplay,
+    Loadout,
 }
 
 pub struct Menu {
@@ -237,6 +246,44 @@ fn ui_button(r: Rect, label: &str, size: f32) {
 
 fn hit(p: &Pointer, r: Rect) -> bool {
     p.pressed && p.pos.map_or(false, |pos| r.contains(pos))
+}
+
+fn draw_tabs(cur: Page, p: &Pointer, px: f32, py: f32, u: f32) -> Option<Page> {
+    let tabs = [
+        ("SETTINGS", Page::Main),
+        ("GAMEPLAY", Page::Gameplay),
+        ("LOADOUT", Page::Loadout),
+    ];
+    let tw = 170.0 * u;
+    let gap = 10.0 * u;
+    let mut out = None;
+    for (i, (label, page)) in tabs.iter().enumerate() {
+        let r = Rect::new(px + 320.0 * u + i as f32 * (tw + gap), py + 16.0 * u, tw, 46.0 * u);
+        let active = *page == cur;
+        let col = if active {
+            Color::new(0.25, 0.45, 0.75, 0.98)
+        } else {
+            Color::new(0.2, 0.25, 0.35, 0.95)
+        };
+        draw_rectangle(r.x, r.y, r.w, r.h, col);
+        draw_rectangle_lines(r.x, r.y, r.w, r.h, 2.0, Color::new(1.0, 1.0, 1.0, 0.6));
+        centered_text(label, r, 22.0 * u, WHITE);
+        if hit(p, r) {
+            out = Some(*page);
+        }
+    }
+    out
+}
+
+fn choice_button(r: Rect, label: &str, selected: bool, size: f32) {
+    let col = if selected {
+        Color::new(0.2, 0.6, 0.35, 0.98)
+    } else {
+        Color::new(0.2, 0.25, 0.35, 0.95)
+    };
+    draw_rectangle(r.x, r.y, r.w, r.h, col);
+    draw_rectangle_lines(r.x, r.y, r.w, r.h, 2.0, Color::new(1.0, 1.0, 1.0, 0.6));
+    centered_text(label, r, size, WHITE);
 }
 
 impl Menu {
@@ -362,8 +409,83 @@ impl Menu {
             return MenuAction::None;
         }
 
+        // ------------------------------------------------- gameplay page
+        if self.page == Page::Gameplay {
+            draw_text("GAMEPLAY", px + 30.0 * u, py + 56.0 * u, 44.0 * u, WHITE);
+            if let Some(pg) = draw_tabs(Page::Gameplay, &p, px, py, u) {
+                if pg != Page::Gameplay {
+                    self.page = pg;
+                    return MenuAction::None;
+                }
+            }
+            draw_text("RUNNING CANCELS SNEAK", lx, y0 + 9.0 * u, 22.0 * u, WHITE);
+            let tog = Rect::new(tx, y0 - 28.0 * u, tw, 56.0 * u);
+            choice_button(tog, if s.run_cancels_sneak { "ON" } else { "OFF" }, s.run_cancels_sneak, 24.0 * u);
+            if hit(&p, tog) {
+                s.run_cancels_sneak = !s.run_cancels_sneak;
+            }
+            let note = Color::new(1.0, 1.0, 1.0, 0.6);
+            draw_text("Jumping always cancels sneak.", lx, y0 + row + 10.0 * u, 22.0 * u, note);
+            draw_text(
+                "Tap SLIDE while sneaking to stand up (walking or running).",
+                lx,
+                y0 + row + 40.0 * u,
+                22.0 * u,
+                note,
+            );
+            let bw = 240.0 * u;
+            let back = Rect::new(px + (pw - bw) * 0.5, by, bw, bh);
+            ui_button(back, "RESUME", 26.0 * u);
+            if hit(&p, back) {
+                return MenuAction::Resume;
+            }
+            return MenuAction::None;
+        }
+
+        // -------------------------------------------------- loadout page
+        if self.page == Page::Loadout {
+            draw_text("LOADOUT", px + 30.0 * u, py + 56.0 * u, 44.0 * u, WHITE);
+            if let Some(pg) = draw_tabs(Page::Loadout, &p, px, py, u) {
+                if pg != Page::Loadout {
+                    self.page = pg;
+                    return MenuAction::None;
+                }
+            }
+            draw_text("GUN", lx, y0 + 9.0 * u, 26.0 * u, WHITE);
+            let half = (tw - 12.0 * u) * 0.5;
+            let ar = Rect::new(tx, y0 - 28.0 * u, half, 56.0 * u);
+            let sn = Rect::new(tx + half + 12.0 * u, y0 - 28.0 * u, half, 56.0 * u);
+            choice_button(ar, "AR", s.primary == Kind::Ar, 24.0 * u);
+            choice_button(sn, "SNIPER", s.primary == Kind::Sniper, 24.0 * u);
+            if hit(&p, ar) {
+                s.primary = Kind::Ar;
+            } else if hit(&p, sn) {
+                s.primary = Kind::Sniper;
+            }
+            draw_text("MELEE", lx, y0 + row + 9.0 * u, 26.0 * u, WHITE);
+            let kn = Rect::new(tx, y0 + row - 28.0 * u, tw, 56.0 * u);
+            choice_button(kn, "KNIFE", true, 24.0 * u);
+            let note = Color::new(1.0, 1.0, 1.0, 0.6);
+            draw_text("AR aims down iron sights. Sniper has the scope and kills in one shot.", lx, y0 + 2.0 * row + 10.0 * u, 20.0 * u, note);
+            draw_text("Applies when you resume. Tap the gun / knife slots on screen to swap.", lx, y0 + 2.0 * row + 36.0 * u, 20.0 * u, note);
+            let bw = 240.0 * u;
+            let back = Rect::new(px + (pw - bw) * 0.5, by, bw, bh);
+            ui_button(back, "RESUME", 26.0 * u);
+            if hit(&p, back) {
+                return MenuAction::Resume;
+            }
+            return MenuAction::None;
+        }
+
         // ---------------------------------------------------- main page
         draw_text("SETTINGS", px + 30.0 * u, py + 56.0 * u, 44.0 * u, WHITE);
+        if let Some(pg) = draw_tabs(Page::Main, &p, px, py, u) {
+            if pg != Page::Main {
+                self.page = pg;
+                self.slider = None;
+                return MenuAction::None;
+            }
+        }
 
         draw_text("SENSITIVITY", lx, y0 + 9.0 * u, 26.0 * u, WHITE);
         let sens_btn = Rect::new(tx, y0 - 28.0 * u, tw, 56.0 * u);

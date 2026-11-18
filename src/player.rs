@@ -26,7 +26,11 @@ pub struct Player {
     pub bob_y: f32,
     pub bob_amp: f32,
     pub slide_boost: f32,
-    pub sneak: bool, // toggled sneak (mobile SLIDE tap while walking)
+    pub sneak: bool, // toggled sneak (mobile SLIDE tap)
+    pub run_cancels_sneak: bool, // setting: running stands you up
+    pub scope_speed: f32, // speed cap while scoped / aiming
+    pub scope_look: f32,  // look sensitivity multiplier while scoped
+    pub speed_mul: f32,   // movement speed multiplier (melee is faster)
     pub land: f32,
     pub recoil_pitch: f32,
     pub recoil_yaw: f32,
@@ -62,6 +66,10 @@ impl Player {
             bob_amp: 0.0,
             slide_boost: 0.0,
             sneak: false,
+            run_cancels_sneak: true,
+            scope_speed: 3.6,
+            scope_look: 0.45,
+            speed_mul: 1.0,
             land: 0.0,
             recoil_pitch: 0.0,
             recoil_yaw: 0.0,
@@ -93,7 +101,7 @@ impl Player {
 
     pub fn look(&mut self, dx: f32, dy: f32) {
         const SENS: f32 = 2.2;
-        let s = if self.scoped { SENS * 0.45 } else { SENS };
+        let s = if self.scoped { SENS * self.scope_look } else { SENS };
         self.yaw -= dx * s;
         self.pitch = (self.pitch - dy * s).clamp(-1.5, 1.5);
     }
@@ -197,6 +205,10 @@ impl Player {
         // On mobile, pushing the stick hard in any direction counts as sprint.
         let sprint =
             is_key_down(KeyCode::LeftShift) || self.mobile_move.length_squared() > 0.5;
+        // running stands you up (setting)
+        if sprint && self.run_cancels_sneak {
+            self.sneak = false;
+        }
         let slide_btn = is_key_down(KeyCode::LeftControl)
             || is_key_down(KeyCode::C)
             || self.mobile_slide_active;
@@ -249,8 +261,9 @@ impl Player {
                 speed = 3.0;
             }
             if self.scoped {
-                speed = speed.min(3.6);
+                speed = speed.min(self.scope_speed);
             }
+            speed *= self.speed_mul;
 
             let target = world_wish * speed;
             let dvx = target.x - self.vel.x;
@@ -277,6 +290,7 @@ impl Player {
             self.vel.y = 8.0;
             self.on_ground = false;
             self.sliding = false;
+            self.sneak = false; // jumping always stands you up
             self.land = 0.0;
         }
 
