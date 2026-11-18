@@ -179,34 +179,77 @@ fn draw_knife(xf: &GunXf) {
 }
 
 fn draw_iron_sights(w: f32, h: f32, a: f32) {
+    // Penguin rifle seen from behind: black body, white belly trim, glowing cyan
+    // strips, and the orange beak as the front post.
     let cx = w * 0.5;
     let cy = h * 0.5;
-    let body = Color::new(0.13, 0.14, 0.16, 0.97 * a);
-    let rail = Color::new(0.28, 0.30, 0.34, a);
-    let dark = Color::new(0.05, 0.05, 0.06, a);
-    // rifle seen from behind
+    let blk = Color::new(0.10, 0.10, 0.12, 0.98 * a);
+    let blk2 = Color::new(0.17, 0.17, 0.20, a);
+    let wht = Color::new(0.93, 0.93, 0.96, a);
+    let cyan = Color::new(0.30, 0.90, 1.0, a);
+    let cyan_dim = Color::new(0.30, 0.90, 1.0, 0.25 * a);
+    let org = Color::new(0.93, 0.55, 0.14, a);
+
+    // body (rifle seen from behind) with white belly panels on the lower edges
     tri_quad(
-        vec2(cx - 0.24 * h, h),
-        vec2(cx + 0.24 * h, h),
-        vec2(cx + 0.085 * h, cy + 0.21 * h),
-        vec2(cx - 0.085 * h, cy + 0.21 * h),
-        body,
+        vec2(cx - 0.26 * h, h),
+        vec2(cx + 0.26 * h, h),
+        vec2(cx + 0.09 * h, cy + 0.21 * h),
+        vec2(cx - 0.09 * h, cy + 0.21 * h),
+        blk,
     );
+    tri_quad(
+        vec2(cx - 0.26 * h, h),
+        vec2(cx - 0.20 * h, h),
+        vec2(cx - 0.075 * h, cy + 0.21 * h),
+        vec2(cx - 0.09 * h, cy + 0.21 * h),
+        wht,
+    );
+    tri_quad(
+        vec2(cx + 0.20 * h, h),
+        vec2(cx + 0.26 * h, h),
+        vec2(cx + 0.09 * h, cy + 0.21 * h),
+        vec2(cx + 0.075 * h, cy + 0.21 * h),
+        wht,
+    );
+    // top rail
     tri_quad(
         vec2(cx - 0.05 * h, h),
         vec2(cx + 0.05 * h, h),
         vec2(cx + 0.035 * h, cy + 0.21 * h),
         vec2(cx - 0.035 * h, cy + 0.21 * h),
-        rail,
+        blk2,
     );
-    // rear sight posts
-    draw_rectangle(cx - 0.085 * h, cy + 0.135 * h, 0.035 * h, 0.08 * h, dark);
-    draw_rectangle(cx + 0.05 * h, cy + 0.135 * h, 0.035 * h, 0.08 * h, dark);
-    // front sight post with guards; tip sits on the crosshair
-    draw_rectangle(cx - 0.0045 * h, cy, 0.009 * h, 0.135 * h, dark);
-    draw_rectangle(cx - 0.032 * h, cy + 0.03 * h, 0.007 * h, 0.105 * h, dark);
-    draw_rectangle(cx + 0.025 * h, cy + 0.03 * h, 0.007 * h, 0.105 * h, dark);
-    draw_circle(cx, cy, 0.006 * h, Color::new(1.0, 0.2, 0.1, a));
+    // glowing cyan strips down the body
+    for sx in [-1.0f32, 1.0] {
+        tri_quad(
+            vec2(cx + sx * 0.125 * h, h),
+            vec2(cx + sx * 0.140 * h, h),
+            vec2(cx + sx * 0.062 * h, cy + 0.225 * h),
+            vec2(cx + sx * 0.056 * h, cy + 0.225 * h),
+            cyan,
+        );
+    }
+    // rear sight: two black posts with glowing inner edges
+    for sx in [-1.0f32, 1.0] {
+        let x0 = if sx < 0.0 { cx - 0.095 * h } else { cx + 0.055 * h };
+        draw_rectangle(x0, cy + 0.125 * h, 0.04 * h, 0.095 * h, blk);
+        let ix = if sx < 0.0 { x0 + 0.04 * h - 0.005 * h } else { x0 };
+        draw_rectangle(ix, cy + 0.135 * h, 0.005 * h, 0.075 * h, cyan);
+    }
+    // front post = the penguin's orange beak, tip on the crosshair
+    draw_triangle(
+        vec2(cx, cy),
+        vec2(cx - 0.016 * h, cy + 0.075 * h),
+        vec2(cx + 0.016 * h, cy + 0.075 * h),
+        org,
+    );
+    draw_rectangle(cx - 0.016 * h, cy + 0.075 * h, 0.032 * h, 0.06 * h, blk);
+    draw_rectangle(cx - 0.016 * h, cy + 0.075 * h, 0.032 * h, 0.006 * h, wht);
+    // cyan holo ring + dot around the aim point
+    draw_circle_lines(cx, cy, 0.034 * h, 3.0, cyan_dim);
+    draw_circle_lines(cx, cy, 0.034 * h, 1.5, cyan);
+    draw_circle(cx, cy, 0.005 * h, cyan);
 }
 
 struct Game {
@@ -642,8 +685,8 @@ impl Game {
         let muzzle = if sniper {
             eye + dir * 0.9 + right * 0.22 - upv * 0.16
         } else {
-            // penguin rifle: the beak sits up-left of the crosshair (see ar_model.rs pose)
-            eye + dir * 0.9 - right * 0.25 + upv * 0.15
+            // penguin rifle: the beak sits on the crosshair
+            eye + dir * 0.9 - upv * 0.03
         };
         let (tl, tcol) = if sniper {
             (0.3, Color::new(0.6, 0.85, 1.0, 1.0))
@@ -848,9 +891,12 @@ impl Game {
         } else if sniper {
             (vec2(w * 0.72 + bob.x, h * 0.88 + bob.y), 370.0)
         } else {
-            // penguin rifle: sits exactly where the reference render has it
+            // penguin rifle: beak tip sits exactly on the crosshair, hold angle from the reference
+            let a0 = ar_model::POSE_ANGLE;
             (
-                vec2(w * ar_model::POSE_X + bob.x, h * ar_model::POSE_Y + bob.y),
+                vec2(w * 0.5, h * 0.5)
+                    - vec2(a0.cos(), a0.sin()) * (ar_model::MUZZLE_X * k)
+                    + bob,
                 ar_model::MUZZLE_X,
             )
         };
