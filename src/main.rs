@@ -285,6 +285,17 @@ impl Game {
     }
 
     fn draw(&mut self) {
+        // sky colour, so we can tell whether the 3D pass is drawing at all
+        clear_background(Color::new(0.45, 0.62, 0.85, 1.0));
+
+        // guard against NaN camera values (would give a black screen)
+        if !self.player.yaw.is_finite() {
+            self.player.yaw = 0.0;
+        }
+        if !self.player.pitch.is_finite() {
+            self.player.pitch = 0.0;
+        }
+
         let fov: f32 = if self.player.scoped { 26.0 } else { 78.0 };
         let camera = self.player.camera(fov.to_radians());
         set_camera(&camera);
@@ -431,8 +442,21 @@ impl Game {
             Color::new(1.0, 1.0, 1.0, 0.6),
         );
 
+        // ---------- TEMP debug (remove once 3D renders)
+        {
+            let e = self.player.eye_pos();
+            draw_text(
+                &format!(
+                    "eye {:.1} {:.1} {:.1}  yaw {:.2} pitch {:.2}  bots {}  {}x{}",
+                    e.x, e.y, e.z, self.player.yaw, self.player.pitch,
+                    self.bots.len(), w as i32, h as i32
+                ),
+                40.0, 110.0, 20.0, Color::new(1.0, 1.0, 0.3, 1.0),
+            );
+        }
+
         // ---------- state hints
-        let mut y = 130.0;
+        let mut y = 150.0;
         let mut hints: Vec<&str> = Vec::new();
         if self.player.sliding {
             hints.push("SLIDING");

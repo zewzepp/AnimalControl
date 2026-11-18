@@ -105,7 +105,22 @@ impl TouchControls {
                     }
                 }
                 TouchPhase::Ended | TouchPhase::Cancelled => {
-                    // handled by the release pass below
+                    // Release immediately, and don't count this touch as active
+                    // (macroquad can keep reporting ended touches for a while).
+                    for slot in [
+                        &mut self.move_touch_id,
+                        &mut self.aim_touch_id,
+                        &mut self.fire_touch_id,
+                        &mut self.scope_touch_id,
+                        &mut self.jump_touch_id,
+                        &mut self.slide_touch_id,
+                        &mut self.reload_touch_id,
+                    ] {
+                        if *slot == Some(id) {
+                            *slot = None;
+                        }
+                    }
+                    active_ids.pop();
                 }
             }
         }
